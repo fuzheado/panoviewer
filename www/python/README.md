@@ -99,7 +99,7 @@ First run over 500 files: 218 already tiled, 22 too small, 142 never viewed, **1
 |---|---|---|
 | `uptime-check` | `17 * * * *` | `src/check_uptime.py` — health + database + one real tile; **`--emails onfailure`** is the only alerting this tool has. Also appends to `logs/uptime.log`. |
 | `sweep-tiles` | `30 3 * * *` | repairs panoramas that were served but never tiled, 2 000 files a night, resumable cursor |
-| `prune-cache` | `45 4 * * 0` | removes tiler temporaries and abandoned tile dirs older than a day |
+| `prune-cache` | `45 4 * * 0` | removes tiler temporaries and abandoned tile dirs older than a day, and enforces the **200 GB** cache budget (LRU, oldest entry first) |
 
 ```bash
 toolforge jobs run uptime-check --schedule "17 * * * *" --image python3.11 --mount=all \

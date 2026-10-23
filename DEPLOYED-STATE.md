@@ -99,7 +99,9 @@ Three cron jobs live in the tool account (not in git — `toolforge jobs list` i
 
 * `uptime-check` hourly — health, database, one real tile; `--emails onfailure`
 * `sweep-tiles` nightly — repairs served-but-untiled panoramas (cursor in `logs/sweep-cursor.json`)
-* `prune-cache` weekly — drops tiler temporaries and abandoned tile directories older than a day
+* `prune-cache` weekly — drops tiler temporaries and abandoned tile directories older than a day, and enforces a **200 GB** cache budget (`--max-bytes 200000000000`, decimal GB, LRU by entry). Evicting a tile directory removes its preview and attempt marker too, so an eviction is a clean cache miss rather than a re-tiling candidate.
+
+First budget report: **96.4 GB of 200 GB (48 %)** — the cap is not binding yet, and the measured full scan takes ~2 minutes.
 
 They run `src/*.py` from this checkout, so a `git pull` changes them without touching the schedules.
 

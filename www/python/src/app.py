@@ -1,175 +1,143 @@
-"""panoviewer — WSGI staging skeleton.
+"""panoviewer — WSGI entry point (Toolforge python3.11: $HOME/www/python/src/app.py -> app).
 
-Purpose right now is NOT to serve the viewer; it is to prove, inside a real
-python3.11 Toolforge pod, the four things the port depends on:
+A thin shell: routing, HTTP semantics and error containment. All the behaviour lives in
+`panoviewer.py`, which is why it can be tested without a database or a cluster.
 
-  1. the runtime finds this file at $HOME/www/python/src/app.py (variable `app`),
-  2. there is a usable MySQL path to the wiki replicas (a driver, or the client),
-  3. the tool environment is present (HOME, TOOL_DATA_DIR, replica credentials),
-  4. the docroot/blob layout the handler will read is where we think it is.
+Routes:
+    GET /config.php?f=<name>[&p=1]   the viewer's data endpoint (JSON, same contract as the PHP)
+    GET /healthz[?db=1]              diagnostics; cheap by default, ?db=1 also probes the replica
+    GET /, /src/**, /examples/**, /cache/**    static files from public_html
 
-GET /healthz returns that as JSON and always 200, so the pod is not restarted in
-a loop while we are learning. A production health check should instead fail
-loudly (see DEPLOYED-STATE.md and PORT-panoviewer-off-php.md).
-
-Everything here is standard library only, on purpose: if a dependency is
-missing, we want `/healthz` to tell us, not to crash the import.
-
-FOUND BY RUNNING IT (2026-10-23, first staging pod): `image.img_timestamp` is a
-`varbinary(14)` column, so a Python driver hands it back as **bytes**
-(b"20260813110841"), where PHP's mysqli gave a string. Unhandled, that is a
-`TypeError: Object of type bytes is not JSON serializable` inside the response
-and a 500 for every request -- i.e. the port would "work" in review and fail on
-the first real call. Decode every value that crosses into JSON.
+Note that the docroot is served by THIS app. The python3.11 image runs only the WSGI callable —
+it does not serve public_html the way lighttpd did (measured on staging 2026-10-23), so a missing
+static route is a 404 for every stylesheet and tile.
 """
 import json
 import os
-import shutil
 import sys
-import time
+import traceback
 
-DB_HOST = os.environ.get("PANOVIEWER_DB_HOST", "commonswiki.labsdb")
-DB_NAME = "commonswiki_p"
-# A real panorama that exists (>4000 px, so it takes the tiling path), used only
-# to prove the query works end-to-end.
-PROBE_FILE = "Athens-acropolis-propylaia-2023-05-panorama-2x.jpg"
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import panoviewer                                            # noqa: E402
 
-def _text_value(value):
-    """Rows from the wiki replicas carry varbinary columns; keep JSON happy."""
-    if isinstance(value, (bytes, bytearray)):
-        return bytes(value).decode("utf-8", "replace")
-    return value
+_CONTEXT = None
 
 
-def _probe_drivers():
-    """Which MySQL access paths exist in this image?"""
-    found = {}
-    for name in ("pymysql", "MySQLdb", "mysql.connector", "mariadb"):
-        try:
-            mod = __import__(name)
-            found[name] = getattr(mod, "__version__", "present")
-        except Exception as exc:                      # noqa: BLE001 - we want the reason
-            found[name] = "absent: %s" % type(exc).__name__
-    return found
+def context():
+    global _CONTEXT
+    if _CONTEXT is None:
+        _CONTEXT = panoviewer.production_context()
+    return _CONTEXT
 
 
-def _probe_db():
-    """Connect with the tool's own credentials and run the real query."""
-    host = DB_HOST
-    user = os.environ.get("TOOL_REPLICA_USER")
-    password = os.environ.get("TOOL_REPLICA_PASSWORD")
-    if not (user and password):
-        return {"ok": False, "error": "TOOL_REPLICA_USER/PASSWORD not in the environment"}
+def _respond(start_response, status, body, content_type="text/plain; charset=utf-8",
+             cache_control="no-store", extra=None):
+    if isinstance(body, str):
+        body = body.encode("utf-8")
+    headers = [("Content-Type", content_type),
+               ("Content-Length", str(len(body))),
+               ("Cache-Control", cache_control),
+               ("X-Content-Type-Options", "nosniff")]
+    headers.extend(extra or [])
+    start_response(status, headers)
+    return [_body_for_method(body)]
 
-    started = time.time()
+
+_METHOD_IS_HEAD = [False]
+
+
+def _body_for_method(body):
+    return b"" if _METHOD_IS_HEAD[0] else body
+
+
+def _json_response(start_response, status, payload, cache_control="no-store"):
+    body = (json.dumps(payload) + "\n").encode("utf-8")
+    return _respond(start_response, status, body,
+                    content_type="application/json; charset=utf-8",
+                    cache_control=cache_control)
+
+
+def _diagnostics(ctx, want_db):
+    """Everything needed to debug a deployment, and nothing that costs a query by default."""
+    checks = {
+        "service": "panoviewer",
+        "python": sys.version.split()[0],
+        "home": ctx.home,
+        "public_dir": ctx.public_dir,
+        "public_dir_exists": os.path.isdir(ctx.public_dir),
+        "cache_dir": ctx.cache_dir,
+        "cache_entries": (len(os.listdir(ctx.cache_dir))
+                          if os.path.isdir(ctx.cache_dir) else None),
+        "nona": os.path.exists(os.path.join(ctx.data_dir, "bin", "nona")),
+        "tiler_shim": os.path.exists(os.path.join(ctx.home, "bin", "toolforge")),
+        "replica_my_cnf": os.path.exists(os.path.join(ctx.home, "replica.my.cnf")),
+        "env": sorted(k for k in os.environ
+                      if k.startswith("TOOL_") and not k.endswith(("PASSWORD", "SECRET"))),
+    }
     try:
         import pymysql
-    except Exception:
-        return {
-            "ok": False,
-            "error": "no pymysql; see drivers above",
-            "falls_back_to": "/usr/bin/mariadb: %s" % (shutil.which("mariadb") or "absent"),
-        }
-    try:
-        conn = pymysql.connect(host=host, user=user, password=password, database=DB_NAME,
-                               connect_timeout=5, read_timeout=5)
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT img_width, img_height, img_timestamp FROM image WHERE img_name = %s",
-                (PROBE_FILE,),
-            )
-            row = cur.fetchone()
-        conn.close()
-        return {
-            "ok": bool(row),
-            "host": host,
-            "ms": round((time.time() - started) * 1000),
-            "row": None if row is None else {
-                "img_width": _text_value(row[0]),
-                "img_height": _text_value(row[1]),
-                "img_timestamp": _text_value(row[2]),
-                "img_timestamp_type": type(_text_value(row[2])).__name__,
-            },
-        }
-    except Exception as exc:                          # noqa: BLE001
-        return {"ok": False, "host": host, "error": "%s: %s" % (type(exc).__name__, exc)}
-
-
-def _probe_paths():
-    home = os.environ.get("HOME", "")
-    tool_data = os.environ.get("TOOL_DATA_DIR", "")
-    cache = os.path.join(home, "public_html", "cache") if home else ""
-    return {
-        "HOME": home,
-        "TOOL_DATA_DIR": tool_data,
-        "docroot": {
-            p: os.path.isdir(os.path.join(home, "public_html", p))
-            for p in (".", "cache", "src", "examples")
-        } if home else {},
-        "cache_entries": (len(os.listdir(cache)) if cache and os.path.isdir(cache) else None),
-        "nona": os.path.exists(os.path.join(tool_data or home, "bin", "nona")),
-        "service_manifest": os.path.exists(os.path.join(home, "service.manifest")),
-        "replica_my_cnf": os.path.exists(os.path.join(home, "replica.my.cnf")),
-    }
-
-
-def _json(start_response, payload, status="200 OK"):
-    body = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode()
-    start_response(status, [("Content-Type", "application/json; charset=utf-8"),
-                            ("Content-Length", str(len(body))),
-                            ("Cache-Control", "no-store")])
-    return [body]
-
-
-def _text(start_response, text, status="200 OK", ctype="text/plain; charset=utf-8"):
-    body = text.encode()
-    start_response(status, [("Content-Type", ctype),
-                            ("Content-Length", str(len(body))),
-                            ("Cache-Control", "no-store")])
-    return [body]
-
-
-INDEX_HTML = """<!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8"><title>panoviewer — staging</title>
-<style>body{font-family:sans-serif;max-width:40rem;margin:3rem auto;line-height:1.5}
-code{background:#eee;padding:.1rem .3rem}</style></head><body>
-<h1>panoviewer — staging (panoviewer2)</h1>
-<p>This is the rewrite skeleton running on <code>python3.11</code>, not the viewer.
-The production tool is <a href="https://panoviewer.toolforge.org/">panoviewer.toolforge.org</a>.</p>
-<p>Diagnostics: <a href="healthz">/healthz</a> — runtime, MySQL path, tool environment, docroot.</p>
-</body></html>
-"""
+        checks["pymysql"] = getattr(pymysql, "__version__", "present")
+    except Exception as exc:                                  # noqa: BLE001
+        checks["pymysql"] = "absent: %s" % type(exc).__name__
+    if want_db:
+        try:
+            meta = ctx.metadata("Athens-acropolis-propylaia-2023-05-panorama-2x.jpg")
+            checks["db_probe"] = {"ok": bool(meta), "row": meta}
+        except Exception as exc:                              # noqa: BLE001
+            checks["db_probe"] = {"ok": False, "error": "%s: %s" % (type(exc).__name__, exc)}
+    return checks
 
 
 def app(environ, start_response):
+    method = environ.get("REQUEST_METHOD", "GET").upper()
     path = environ.get("PATH_INFO", "/") or "/"
-    method = environ.get("REQUEST_METHOD", "GET")
+    query = environ.get("QUERY_STRING", "")
+    _METHOD_IS_HEAD[0] = method == "HEAD"
 
     if method not in ("GET", "HEAD"):
-        return _json(start_response, {"error": "method not allowed"}, status="405 Method Not Allowed")
+        return _respond(start_response, "405 Method Not Allowed", "method not allowed",
+                        extra=[("Allow", "GET, HEAD")])
 
-    if path in ("/healthz", "/healthz/"):
-        drivers = _probe_drivers()
-        db = _probe_db()
-        payload = {
-            "service": "panoviewer staging skeleton",
-            "python": sys.version.split()[0],
-            "drivers": drivers,
-            "database": db,
-            "paths": _probe_paths(),
-        }
-        return _json(start_response, payload)
+    try:
+        ctx = context()
+        params = {}
+        for pair in query.split("&"):
+            if not pair:
+                continue
+            key, _, value = pair.partition("=")
+            params[key] = value
 
-    if path in ("/", "/index.html"):
-        return _text(start_response, INDEX_HTML, ctype="text/html; charset=utf-8")
+        if path in ("/healthz", "/healthz/"):
+            return _json_response(start_response, "200 OK",
+                                  _diagnostics(ctx, want_db="db" in params))
 
-    # The real endpoint the viewer calls. Not implemented here on purpose: a stub
-    # that returns something plausible is worse than one that says "not yet".
-    if path.rstrip("/") in ("/config.php", "/config"):
-        return _json(start_response, {
-            "error": "staging skeleton: the /config.php handler is not ported yet",
-            "see": "php-probe/PORT-panoviewer-off-php.md",
-        }, status="501 Not Implemented")
+        if path.rstrip("/") in ("/config.php", "/config"):
+            raw_name = params.get("f", "")
+            if raw_name:
+                raw_name = _unquote(raw_name)
+            payload, status = panoviewer.build_config(
+                ctx, raw_name, polling=("p" in params))
+            return _json_response(start_response, "200 OK" if status == 200 else "%d" % status,
+                                  payload)
 
-    return _json(start_response, {"error": "not found", "path": path}, status="404 Not Found")
+        resolved, status = panoviewer.resolve_static(ctx, path)
+        if status != 200:
+            if status == 403:
+                return _respond(start_response, "403 Forbidden", "forbidden")
+            return _respond(start_response, "404 Not Found", "not found")
+
+        body = panoviewer.read_static(resolved)
+        return _respond(start_response, "200 OK", body,
+                        content_type=panoviewer.content_type(resolved),
+                        cache_control=panoviewer._cache_control(path))
+
+    except Exception:                                          # noqa: BLE001
+        traceback.print_exc(file=sys.stderr)
+        return _json_response(start_response, "500 Internal Server Error",
+                              {"error": "internal error; see the service log"})
+
+
+def _unquote(value):
+    from urllib.parse import unquote_plus
+    return unquote_plus(value)

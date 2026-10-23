@@ -56,8 +56,9 @@ This repository is **not** the whole deployment. Read this before "restoring" an
 ## Pruning the cache
 
 `www/python/src/prune_cache.py` (dry run by default) removes the tiler's `<md5>.full.jpg` temporaries and
-tile directories without a `config.json`. Measured on this tool, 2026-10-23: **7,916 temporaries = 206 GB**
-plus 891 abandoned directories = 913 MB — two thirds of a 303 GB cache, leaked by the old shell wrapper.
+tile directories without a `config.json`. Ran on the live cache 2026-10-23: **8,807 entries removed, 207.0 GB freed** — 303 GB → **95 GB**,
+NFS 83 % → 81 %. Every preview (7,081) and finished tile set (6,183) was kept; a re-run reports
+0 candidates. The files were the tiler's full-resolution downloads, reproducible from Commons.
 
 ## `public_html/cache/` is data, not code
 

@@ -4,7 +4,8 @@ A thin shell: routing, HTTP semantics and error containment. All the behaviour l
 `panoviewer.py`, which is why it can be tested without a database or a cluster.
 
 Routes:
-    GET /config.php?f=<name>[&p=1]   the viewer's data endpoint (JSON, same contract as the PHP)
+    GET /config?f=<name>[&p=1]       the viewer's data endpoint (JSON, same contract as the PHP)
+    GET /config.php?f=<name>         legacy alias for the same route (see below)
     GET /healthz[?db=1]              diagnostics; cheap by default, ?db=1 also probes the replica
     GET /, /src/**, /examples/**, /cache/**    static files from public_html
 
@@ -112,7 +113,11 @@ def app(environ, start_response):
             return _json_response(start_response, "200 OK",
                                   _diagnostics(ctx, want_db="db" in params))
 
-        if path.rstrip("/") in ("/config.php", "/config"):
+        # Canonical route is /config: there is no PHP behind it any more, and a ".php" path invites the
+        # question. /config.php stays as an alias because the old index.html (and anything already cached
+        # in a browser) asks for it -- verified 2026-10-23 that nothing outside this repository does:
+        # 0 on-wiki references to any panoviewer path, and the Wikidata gadget links only to "/#<file>".
+        if path.rstrip("/") in ("/config", "/config.php"):
             raw_name = params.get("f", "")
             if raw_name:
                 raw_name = _unquote(raw_name)

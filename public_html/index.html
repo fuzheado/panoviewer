@@ -80,7 +80,7 @@ function recheck()
   }
 
   // use p=1 to activate simplified polling mode on the server
-  $.getJSON('config.php', { 'f': f, 'p': 1 }, handleCheckReply);
+  $.getJSON('config', { 'f': f, 'p': 1 }, handleCheckReply);
 }
 
 // called once a json config is obtained
@@ -129,7 +129,7 @@ resize();
 if (f != '')
 {
   // attempt first load of configuration
-  $.getJSON('config.php', { 'f': f }, configLoaded);
+  $.getJSON('config', { 'f': f }, configLoaded);
 } else {
   noty({ text: "Specify a filename" });
 }

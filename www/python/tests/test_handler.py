@@ -447,6 +447,26 @@ class Wsgi(Fixture):
         self.assertEqual(status, "200 OK")
         self.assertIn(b"error", body)
 
+    def test_the_canonical_route_is_config(self):
+        self.add_row(SMALL_NAME)
+        status, _, body = self.call("/config", "f=" + urllib.parse.quote(SMALL_NAME))
+        self.assertEqual(status, "200 OK")
+        self.assertTrue(json.loads(body)["pannellum"]["autoLoad"])
+
+    def test_the_legacy_php_route_still_answers(self):
+        # a browser holding the old index.html, or any caller I cannot see, must keep working
+        self.add_row(SMALL_NAME)
+        status, _, body = self.call("/config.php", "f=" + urllib.parse.quote(SMALL_NAME))
+        self.assertEqual(status, "200 OK")
+        self.assertEqual(json.loads(body)["pannellum"]["width"], 2000)
+
+    def test_index_html_asks_for_the_canonical_route(self):
+        page = os.path.join(os.path.dirname(HERE), "..", "..", "public_html", "index.html")
+        with open(page, encoding="utf-8") as handle:
+            html = handle.read()
+        self.assertNotIn("config.php", html,
+                         "index.html must ask for /config; the .php alias is only for old callers")
+
     def test_post_is_method_not_allowed(self):
         captured = {}
 

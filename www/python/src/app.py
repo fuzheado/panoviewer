@@ -68,8 +68,10 @@ def _diagnostics(ctx, want_db):
         "public_dir": ctx.public_dir,
         "public_dir_exists": os.path.isdir(ctx.public_dir),
         "cache_dir": ctx.cache_dir,
-        "cache_entries": (len(os.listdir(ctx.cache_dir))
-                          if os.path.isdir(ctx.cache_dir) else None),
+        # NOT a count of the entries: listing this directory means reading ~13,000 names over NFS,
+        # and the liveness probe asks every 10 seconds. Measured at 3.4 ms per probe, forever.
+        # Counts belong in the weekly trend line, which can afford to look.
+        "cache_dir_ok": os.path.isdir(ctx.cache_dir),
         "nona": os.path.exists(os.path.join(ctx.data_dir, "bin", "nona")),
         "tiler_shim": os.path.exists(os.path.join(ctx.home, "bin", "toolforge")),
         "replica_my_cnf": os.path.exists(os.path.join(ctx.home, "replica.my.cnf")),

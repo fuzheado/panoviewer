@@ -88,7 +88,60 @@ def run(base=None, sample=None, tile=None, get=None, log=print):
         health.get("python", "?"), len(body))
 
 
-def _append_log(ok, message):
+def _tree_bytes(path):
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for name in files:
+            try:
+                total += os.path.getsize(os.path.join(root, name))
+            except OSError:
+                pass
+    return total
+
+
+def survey(cache_dir):
+    """One pass over the cache: how many panoramas are tiled, how many are previews only, how big."""
+    counts = {"tiled": 0, "untitled": 0, "previews": 0, "bytes": 0}
+    try:
+        names = os.listdir(cache_dir)
+    except OSError:
+        return counts
+    for name in names:
+        path = os.path.join(cache_dir, name)
+        try:
+            if os.path.isdir(path):
+                if os.path.isfile(os.path.join(path, "config.json")):
+                    counts["tiled"] += 1
+                else:
+                    counts["untitled"] += 1
+                counts["bytes"] += _tree_bytes(path)
+            elif name.endswith(".jpg") and not name.endswith(".full.jpg"):
+                counts["previews"] += 1
+                counts["bytes"] += os.path.getsize(path)
+        except OSError:
+            continue
+    return counts
+
+
+def trend(cache_dir=None, apply=True, log=print):
+    """Append one line of *trend* rather than health.
+
+    A number that would have made the October 2026 problems visible before anyone complained: `untitled`
+    is the count of panoramas that have been served but never tiled (891 of them at the worst point), and
+    `cache` is the figure the 200 GB budget enforces.
+    """
+    cache_dir = cache_dir or os.path.join(os.environ.get("TOOL_DATA_DIR") or os.environ.get("HOME") or ".",
+                                          "public_html", "cache")
+    counts = survey(cache_dir)
+    message = "tiled=%d untitled=%d previews=%d cache=%.1fGB" % (
+        counts["tiled"], counts["untitled"], counts["previews"], counts["bytes"] / 1e9)
+    if apply:
+        _append_log(True, message, tag="TREND")
+    log("[trend] %s" % message)
+    return counts
+
+
+def _append_log(ok, message, tag=None):
     data_dir = os.environ.get("TOOL_DATA_DIR")
     if not data_dir:
         return
@@ -96,9 +149,9 @@ def _append_log(ok, message):
         path = os.path.join(data_dir, "logs", "uptime.log")
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "a") as handle:
+            label = tag or ("OK  " if ok else "FAIL")
             handle.write("%s %s %s\n" % (
-                time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                "OK  " if ok else "FAIL", message))
+                time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), label, message))
     except OSError:
         pass
 
@@ -108,7 +161,13 @@ def main(argv=None):
     parser.add_argument("--base", default=os.environ.get("PANOVIEWER_URL", BASE))
     parser.add_argument("--sample", default=SAMPLE)
     parser.add_argument("--tile", default=SAMPLE_TILE)
+    parser.add_argument("--trend", action="store_true",
+                        help="append a weekly cache summary to logs/uptime.log instead of checking health")
     args = parser.parse_args(argv)
+
+    if args.trend:
+        counts = trend()
+        return 0 if counts["previews"] or counts["tiled"] else 1
 
     ok, message = run(base=args.base, sample=args.sample, tile=args.tile)
     line = "[uptime] %s" % message

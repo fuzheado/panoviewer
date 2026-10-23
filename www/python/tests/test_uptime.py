@@ -128,6 +128,63 @@ class ContextWiring(unittest.TestCase):
         self.assertIs(ctx.fetch, fetch)
 
 
+class Trend(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.cache = tempfile.mkdtemp(prefix="panoviewer-trend-")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.cache, ignore_errors=True)
+
+    def tiled(self, name, tiles=2):
+        d = os.path.join(self.cache, name)
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "config.json"), "w") as h:
+            h.write("{}")
+        for i in range(tiles):
+            with open(os.path.join(d, "t%d.jpg" % i), "wb") as h:
+                h.write(b"x" * 1000)
+
+    def preview(self, name, size=500):
+        with open(os.path.join(self.cache, name + ".jpg"), "wb") as h:
+            h.write(b"x" * size)
+
+    def test_it_counts_tiled_untitled_and_previews(self):
+        self.tiled("aaa")
+        self.tiled("bbb")
+        os.makedirs(os.path.join(self.cache, "ccc"))          # abandoned: no config.json
+        self.preview("ddd")
+        self.preview("eee")
+        counts = check_uptime.survey(self.cache)
+        self.assertEqual(counts["tiled"], 2)
+        self.assertEqual(counts["untitled"], 1)
+        self.assertEqual(counts["previews"], 2)
+        self.assertGreaterEqual(counts["bytes"], 2 * 2000 + 2 * 500)
+
+    def test_the_line_is_one_line_with_the_numbers(self):
+        self.tiled("aaa")
+        self.preview("bbb")
+        lines = []
+        original = check_uptime._append_log
+        check_uptime._append_log = lambda ok, message, tag=None: lines.append((tag, message))
+        try:
+            counts = check_uptime.trend(cache_dir=self.cache, log=lambda _m: None)
+        finally:
+            check_uptime._append_log = original
+        self.assertEqual(counts["tiled"], 1)
+        self.assertEqual(len(lines), 1)
+        tag, message = lines[0]
+        self.assertEqual(tag, "TREND")
+        self.assertIn("tiled=1", message)
+        self.assertIn("untitled=0", message)
+        self.assertIn("cache=", message)
+
+    def test_a_missing_cache_is_not_a_crash(self):
+        counts = check_uptime.survey(os.path.join(self.cache, "nope"))
+        self.assertEqual(counts["tiled"], 0)
+
+
 class MetadataCacheTests(unittest.TestCase):
     def test_a_lookup_is_reused_within_the_window(self):
         calls = []

@@ -157,6 +157,43 @@ class Eviction(PruneFixture):
         self.assertEqual(report["lru"], [])
 
 
+class LogRotation(PruneFixture):
+    def make_log(self, name, lines, pad=0):
+        directory = os.path.join(self.cache, "logs")
+        os.makedirs(directory, exist_ok=True)
+        with open(os.path.join(directory, name), "w") as handle:
+            for i in range(lines):
+                handle.write("line %d %s\n" % (i, "x" * pad))
+        return directory
+
+    def test_a_big_log_is_trimmed_to_the_tail(self):
+        directory = self.make_log("tile.log", 200, pad=10)
+        results = prune_cache.rotate_logs(directory, limit=100, keep=5)
+        self.assertEqual(len(results), 1)
+        name, before, after = results[0]
+        self.assertEqual(name, "tile.log")
+        self.assertGreater(before, 100)
+        self.assertLess(after, before)
+        with open(os.path.join(directory, "tile.log")) as handle:
+            lines = handle.readlines()
+        self.assertEqual(len(lines), 5)
+        self.assertIn("line 199", lines[-1], "the newest lines are the ones kept")
+
+    def test_a_small_log_is_left_alone(self):
+        directory = self.make_log("uptime.log", 3)
+        self.assertEqual(prune_cache.rotate_logs(directory, limit=10_000_000), [])
+
+    def test_a_dry_run_reports_without_writing(self):
+        directory = self.make_log("tile.log", 200, pad=10)
+        before = os.path.getsize(os.path.join(directory, "tile.log"))
+        results = prune_cache.rotate_logs(directory, limit=100, keep=5, apply=False)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(os.path.getsize(os.path.join(directory, "tile.log")), before)
+
+    def test_a_missing_logs_directory_is_not_an_error(self):
+        self.assertEqual(prune_cache.rotate_logs(os.path.join(self.cache, "nope")), [])
+
+
 class Modes(PruneFixture):
     def test_dry_run_deletes_nothing(self):
         path = self.make_file("abc.full.jpg")

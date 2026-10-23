@@ -1,0 +1,7 @@
+# panoviewer serves one page per panorama, and every page's JS asks /config for it.
+# A crawler that executes JavaScript would therefore queue a real tiling job per panorama
+# (up to 6.5 minutes of compute and ~100 MB of download each). Nothing here is worth indexing.
+User-agent: *
+Disallow: /config
+Disallow: /cache/
+Allow: /

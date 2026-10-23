@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="panoviewer">
+  <rect width="64" height="64" rx="12" fill="#1b2430"/>
+  <circle cx="32" cy="32" r="20" fill="none" stroke="#7fb3d5" stroke-width="3"/>
+  <path d="M12 32h40M32 12c7 6 7 34 0 40M32 12c-7 6-7 34 0 40" fill="none" stroke="#7fb3d5" stroke-width="2" opacity=".7"/>
+  <path d="M14 44c6-6 12-9 18-9s12 3 18 9" fill="none" stroke="#f0c674" stroke-width="3" stroke-linecap="round"/>
+</svg>

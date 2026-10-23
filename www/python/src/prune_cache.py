@@ -178,6 +178,45 @@ def apply(report, log=print):
     return removed, freed
 
 
+LOG_LIMIT = 10 * 1024 * 1024        # rotate either log once it passes 10 MB
+LOG_KEEP_LINES = 2000               # ...keeping this many lines
+
+
+def rotate_logs(logs_dir, limit=None, keep=None, apply=True, log=print):
+    """Keep the tool's own logs bounded.
+
+    `tile.log` (one line per tiling attempt) and `uptime.log` (one per hourly check) are append-only and
+    nothing else trims them. Returns [(name, bytes_before, bytes_after)].
+    """
+    limit = LOG_LIMIT if limit is None else limit
+    keep = LOG_KEEP_LINES if keep is None else keep
+    results = []
+    for name in ("tile.log", "uptime.log"):
+        path = os.path.join(logs_dir, name)
+        try:
+            before = os.path.getsize(path)
+        except OSError:
+            continue
+        if before <= limit:
+            continue
+        try:
+            with open(path, "r", errors="replace") as handle:
+                tail = handle.readlines()[-keep:]
+        except OSError as exc:
+            log("  could not read %s: %s" % (path, exc))
+            continue
+        after = sum(len(line) for line in tail)
+        if apply:
+            try:
+                with open(path, "w") as handle:
+                    handle.writelines(tail)
+            except OSError as exc:
+                log("  could not trim %s: %s" % (path, exc))
+                continue
+        results.append((name, before, after))
+    return results
+
+
 def _human(size):
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if size < 1000 or unit == "TB":
@@ -198,6 +237,8 @@ def main(argv=None):
 
     report = scan(args.cache, min_age=args.min_age, max_bytes=args.max_bytes)
     count, freed = _total(report)
+    logs_dir = os.path.join(os.environ.get("TOOL_DATA_DIR") or os.environ.get("HOME") or ".", "logs")
+    rotations = rotate_logs(logs_dir, apply=args.apply, log=print if not args.json else (lambda _m: None))
 
     if args.json:
         payload = {
@@ -210,6 +251,7 @@ def main(argv=None):
             "candidates": count,
             "bytes": freed,
             "kept": report["kept"],
+            "logs_rotated": [name for name, _b, _a in rotations],
             "total_bytes": report["total_bytes"],
             "max_bytes": args.max_bytes,
         }
@@ -238,6 +280,10 @@ def main(argv=None):
             _human(report["total_bytes"]), _human(args.max_bytes),
             100.0 * report["total_bytes"] / args.max_bytes if args.max_bytes else 0))
     print("  TOTAL: %d candidates, %s" % (count, _human(freed)))
+
+    for name, before, after in rotations:
+        print("  %s log: %s -> %s%s" % (
+            name, _human(before), _human(after), "" if args.apply else " (would trim)"))
 
     if not args.apply:
         print("\nNothing was deleted. Re-run with --apply to remove these.")

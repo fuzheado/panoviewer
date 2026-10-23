@@ -37,7 +37,7 @@ This repository is **not** the whole deployment. Read this before "restoring" an
 | sha256 | `31763e2382817b0d7440385731aa2ad20605ba380f85a284dc82b4443c86216c` |
 | placed | `2024-01-25`, hand-copied onto NFS |
 | built | ELF 64-bit x86-64, dynamically linked, `BuildID[sha1]=16a13899e2f46…` |
-| why | hugin-tools is absent from Ubuntu 22.04 (jammy) — see the comment in `Aptfile`; a custom binary was used instead |
+| why | hugin-tools is absent from Ubuntu 22.04 (jammy); a custom binary was used instead, and the 13 missing sonames live in `lib/nona-jammy/` (listed in `www/python/README.md`) |
 | consumed by | `public_html/multires.sh`: `./generate.py --nona="$TOOL_DATA_DIR"/bin/nona …` |
 
 **`nona` also needs 13 jammy libraries** that the stock `python3.11` job image does not have (it is Debian

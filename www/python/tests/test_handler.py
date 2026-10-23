@@ -182,21 +182,24 @@ class LargeImage(Fixture):
         self.assertEqual(payload["pannellum"]["panorama"],
                          "cache/%s.jpg" % panoviewer.md5_name(LARGE_NAME))
 
-    def test_tiler_job_argv_is_unchanged_from_the_php(self):
+    def test_tiler_job_argv_runs_python_never_a_php_image(self):
         self.add_row(LARGE_NAME, width=8000)
         panoviewer.build_config(self.ctx, LARGE_NAME)
         self.assertEqual(len(self.jobs), 1)
         argv = self.jobs[0]
         md5 = panoviewer.md5_name(LARGE_NAME)
         self.assertEqual(argv[1:3], ["jobs", "run"])
-        self.assertIn("--image", argv)
-        self.assertIn("tool-panoviewer/tool-panoviewer:latest", argv)
+        # the tool's own image namespace is denylisted (Regex ^.*/tool-panoviewer/.*$), so the tiler
+        # must run on a stock image; assert we never name the blocked one again
+        self.assertEqual(argv[argv.index("--image") + 1], "python3.11")
+        self.assertNotIn("tool-panoviewer/tool-panoviewer", " ".join(argv))
         self.assertIn("--mount=all", argv)
         self.assertEqual(argv[-1], "pano-" + md5)
         command = argv[argv.index("--command") + 1]
-        self.assertTrue(command.startswith("launcher '"))
-        self.assertIn("multires.sh", command)
-        self.assertIn(self.cache + "/", command)
+        self.assertIn("tile.py", command)
+        self.assertIn("www/python/venv/bin/python", command)
+        self.assertNotIn("multires.sh", command, "the wget-based shell wrapper is gone")
+        self.assertIn(self.cache, command)
         self.assertIn(md5, command)
         self.assertIn(urllib.parse.quote(LARGE_NAME, safe=""), command)
 

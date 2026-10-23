@@ -1,0 +1,128 @@
+"""Tiler entry point: generate Pannellum multires tiles for one Commons file.
+
+Run as a Toolforge job:
+
+    <home>/www/python/venv/bin/python <home>/www/python/src/tile.py <cache-dir> <md5> <urlencoded name>
+
+Why this replaces `public_html/multires.sh` + the Build Service image:
+
+  * The buildpack image was built with the **PHP** buildpack (`Procfile: heroku-php-apache2`), and the
+    registry denylist blocks this tool's whole image namespace (`Regex=^.*/tool-panoviewer/.*$`), so no
+    image built for this tool can run at all — PHP-free or not. The stock `python3.11` image is allowed.
+  * `multires.sh` used `wget`, which the `python3.11` image does not have; it also ran `generate.py` with
+    the *system* interpreter, which has no Pillow or numpy.
+
+Two defects of the shell version are fixed here, both measured on the live cache (2026-10-23):
+
+  1. **It never deleted the full-resolution temporary.** `<md5>.full.jpg` was written for every tiling
+     run and left behind: 7,916 files, **206 GB** — two thirds of the 303 GB cache. Now removed in a
+     `finally` block, so failures clean up too.
+  2. **A failed run left a half-built tile directory.** 891 cache directories had no `config.json`; the
+     viewer then polls `multires_pending` forever. Now a failed run removes its partial output and exits
+     non-zero, so `toolforge jobs list` shows it.
+
+Exit codes matter: the job's status is the only place a failure becomes visible.
+"""
+import argparse
+import os
+import shutil
+import subprocess
+import sys
+import time
+import urllib.parse
+import urllib.request
+
+USER_AGENT = "panoviewer/2.0 (https://panoviewer.toolforge.org/)"
+UPLOAD_BASE = "https://upload.wikimedia.org/wikipedia/commons"
+
+
+def original_url(md5, name):
+    return "%s/%s/%s/%s" % (UPLOAD_BASE, md5[0], md5[:2], name)
+
+
+def download(url, destination, log=print):
+    """Stream to a .part file and rename, so an interrupted run leaves no fake JPEG."""
+    partial = destination + ".part"
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    started = time.time()
+    with urllib.request.urlopen(request, timeout=180) as response:
+        length = response.headers.get("Content-Length")
+        with open(partial, "wb") as handle:
+            shutil.copyfileobj(response, handle, 1024 * 256)
+    os.replace(partial, destination)
+    size = os.path.getsize(destination)
+    log("downloaded %.1f MB in %.1fs%s" % (
+        size / 1e6, time.time() - started,
+        "" if not length else " (Content-Length %s)" % length))
+    return size
+
+
+def run(cache_dir, md5, name, home=None, fetch=download, execute=None, log=print):
+    """Generate tiles. Returns the tile directory. Raises on failure (after cleaning up)."""
+    home = home or os.environ.get("TOOL_DATA_DIR") or os.environ.get("HOME") or os.getcwd()
+    nona = os.path.join(home, "bin", "nona")
+    generate = os.path.join(home, "public_html", "generate.py")
+    execute = execute or (lambda argv: subprocess.run(argv, check=True))
+
+    full = os.path.join(cache_dir, md5 + ".full.jpg")
+    multi = os.path.join(cache_dir, md5)
+
+    for path, what in ((nona, "nona binary"), (generate, "generate.py")):
+        if not os.path.exists(path):
+            raise RuntimeError("missing %s: %s" % (what, path))
+
+    os.makedirs(cache_dir, exist_ok=True)
+    try:
+        fetch(original_url(md5, name), full, log)
+        # start from scratch: a partly-written tile set is worse than none
+        if os.path.isdir(multi):
+            shutil.rmtree(multi, ignore_errors=True)
+        log("tiling %s -> %s" % (full, multi))
+        execute([sys.executable, generate, "--nona=" + nona, "-o", multi, full])
+        if not os.path.isfile(os.path.join(multi, "config.json")):
+            raise RuntimeError("generate.py produced no config.json in %s" % multi)
+        log("done: %s" % multi)
+        return multi
+    except Exception:
+        # Do not leave a directory the viewer will interpret as "tiling in progress" forever.
+        if os.path.isdir(multi) and not os.path.isfile(os.path.join(multi, "config.json")):
+            shutil.rmtree(multi, ignore_errors=True)
+            log("removed the partial tile set at %s" % multi)
+        raise
+    finally:
+        # 206 GB of these accumulated over the years; see the module docstring.
+        for leftover in (full, full + ".part"):
+            try:
+                os.remove(leftover)
+            except FileNotFoundError:
+                pass
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Generate Pannellum multires tiles for one file.")
+    parser.add_argument("cache_dir", help="directory holding the cache (usually <home>/public_html/cache)")
+    parser.add_argument("md5", help="md5 of the normalised file name")
+    parser.add_argument("name", help="URL-encoded Commons file name")
+    args = parser.parse_args(argv)
+
+    name = urllib.parse.unquote(args.name)
+    started = time.time()
+    try:
+        run(args.cache_dir, args.md5, urlencoded_name(name), log=log_line)
+    except Exception as exc:                                   # noqa: BLE001
+        log_line("FAILED after %.1fs: %s: %s" % (time.time() - started, type(exc).__name__, exc))
+        return 1
+    log_line("finished in %.1fs" % (time.time() - started))
+    return 0
+
+
+def urlencoded_name(name):
+    return urllib.parse.quote(name, safe="")
+
+
+def log_line(message):
+    print("[tile %s] %s" % (time.strftime("%H:%M:%S"), message), flush=True)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

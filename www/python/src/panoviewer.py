@@ -41,7 +41,7 @@ import urllib.request
 MAX_WIDTH = 4000
 UPLOAD_BASE = "https://upload.wikimedia.org/wikipedia/commons"
 THUMB_BASE = "https://commons.wikimedia.org/w/thumb.php"
-DEFAULT_JOB_IMAGE = "tool-panoviewer/tool-panoviewer:latest"
+DEFAULT_JOB_IMAGE = "python3.11"   # stock image: the tool's own image namespace is denylisted
 USER_AGENT = "panoviewer/2.0 (https://panoviewer.toolforge.org/)"
 
 # config.php sniffs the first 100 bytes at offset 6 for one of these.
@@ -139,10 +139,19 @@ def _needs_refresh(ctx, jpg_path, db_timestamp):
 
 # ── the tiler ────────────────────────────────────────────────────────────────────────────────────
 def job_argv(ctx, md5, name):
-    """The argv `bin/toolforge` expects — identical to what config.php built."""
-    command = "launcher %s %s %s %s" % (
-        shell_arg(os.path.join(ctx.public_dir, "multires.sh")),
-        shell_arg(ctx.cache_dir + "/"),
+    """The argv `bin/toolforge` expects.
+
+    Changed from the PHP's version on purpose: the tiler is now `tile.py` on the stock python3.11 image,
+    run with the venv interpreter (Pillow/numpy) instead of a buildpack image with a PHP-bearing
+    `Procfile`. The old image cannot run at all — the denylist blocks this tool's whole image namespace
+    (`Regex=^.*/tool-panoviewer/.*$`), so the tiler had to stop being a buildpack image.
+    """
+    python = os.path.join(ctx.home, "www", "python", "venv", "bin", "python")
+    tiler = os.path.join(ctx.home, "www", "python", "src", "tile.py")
+    command = "%s %s %s %s %s" % (
+        shell_arg(python),
+        shell_arg(tiler),
+        shell_arg(ctx.cache_dir),
         shell_arg(md5),
         shell_arg(urllib.parse.quote(name, safe="")),
     )

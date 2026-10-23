@@ -72,6 +72,27 @@ all (and no chance for `finally` to clean up). The handler sizes each job from t
 bundle by extracting the jammy packages from `archive.ubuntu.com` with `dpkg-deb -x` (no root needed); the
 package list is in that table's "Missing" column, and `Aptfile` in this repo is the historical record.
 
+## Repairing panoramas in batches (`src/sweep_tiler.py`)
+
+The handler retries a stuck panorama when somebody opens it. The sweep fixes the ones nobody opens:
+
+```bash
+python3 src/sweep_tiler.py                       # dry run: what is broken and how much
+python3 src/sweep_tiler.py --apply               # queue up to --max-jobs (default 3)
+python3 src/sweep_tiler.py --limit 2000 --apply --cursor logs/sweep-cursor.json   # resumable walk
+```
+
+It walks `Category:360° panoramas` through the API (which returns each file's size, so there is no
+`WHERE img_width > 4000` scan of the 100M-row `image` table), and repairs only entries the tool has
+already served — an entry with no cached preview is skipped unless `--include-unseen` is given, because
+pre-generating tiles for 1.5M unopened files is a cache-growth decision, not a bug fix.
+
+Guardrails: skips files ≤4000 px and files that are not 2:1 (a cylindrical strip cannot be cubed);
+respects the retry cap; paces API requests at 1/second; `--max-jobs 3` because the namespace has an
+8 GiB total memory limit and a big job asks for 4 GiB.
+
+First run over 500 files: 218 already tiled, 22 too small, 142 never viewed, **117 not 2:1**, 1 repaired.
+
 ## Pruning (`src/prune_cache.py`)
 
 ```

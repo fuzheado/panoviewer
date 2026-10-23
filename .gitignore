@@ -4,3 +4,32 @@
 /replica.my.cnf
 /service.log
 /service.manifest
+
+# ── tool-account secrets and dotfiles ────────────────────────────────────────────────────────────
+# This repository is cloned directly into a Toolforge HOME directory
+# (/data/project/panoviewer), so the account's own dotfiles sit next to the code.
+# On 2026-10-23 these were found UNTRACKED AND NOT IGNORED in the live checkout —
+# i.e. one `git add -A` there would have published the tool's client certificates.
+/.toolskube/
+/.kube/
+/.ssh/
+/.gnupg/
+/.bash_history
+/.bash_profile
+/.mysql_history
+/.php_history
+/.lesshst
+/.viminfo
+/.vim/
+/.wget-hsts
+/.cache/
+/.composer/
+/.config/
+/.emacs.d/
+/.selected_editor
+/.description
+/.joe_state
+/.gitconfig
+# junk from a working docroot, also untracked on the deployment
+/error.log
+/vendor/

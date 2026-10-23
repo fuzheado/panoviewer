@@ -30,6 +30,7 @@ Differences from the PHP, all deliberate and all tested:
 """
 import hashlib
 import json
+import math
 import mimetypes
 import os
 import shutil
@@ -146,7 +147,7 @@ def _needs_refresh(ctx, jpg_path, db_timestamp):
 
 
 # ── the tiler ────────────────────────────────────────────────────────────────────────────────────
-def job_argv(ctx, md5, name):
+def job_argv(ctx, md5, name, width=None, height=None):
     """The argv `bin/toolforge` expects.
 
     Changed from the PHP's version on purpose: the tiler is now `tile.py` on the stock python3.11 image,
@@ -165,7 +166,29 @@ def job_argv(ctx, md5, name):
     )
     return [os.path.join(ctx.home, "bin", "toolforge"), "jobs", "run",
             "--image", ctx.job_image, "--mount=all",
+            # without these two the job gets the API default of 512Mi / 0.1 CPU and is OOM-killed
+            "--mem", "%dGi" % tiler_memory_gib(width, height),
+            "--cpu", "1",
             "--command", command, "pano-" + md5]
+
+
+def tiler_memory_gib(width, height=None):
+    """Memory the tiling job must be given.
+
+    Tiling a panorama is memory-bound, and the jobs default is **512Mi** (measured with the jobs API,
+    2026-10-23). nona has to decode the source — `width * height * 3` bytes, 1.0 GB for a 26000x13000
+    image — and write six cube faces at the cube resolution generate.py derives from the width. At
+    512Mi the pod is SIGKILLed by the OOM killer: no traceback, no stderr, and `finally` never runs, so
+    the `.full.jpg` temporary survives. That is why the biggest panoramas never produced a high
+    resolution version, and part of why 206 GB of temporaries accumulated.
+
+    Deliberately conservative and clamped to Toolforge's 4GiB ceiling.
+    """
+    width = int(width or 0)
+    height = int(height or (width // 2))
+    cube = 8 * int(width / math.pi / 8) if width else 0     # generate.py's rule
+    needed = (width * height * 3 + 6 * cube * cube * 3) * 1.5
+    return max(1, min(4, int(math.ceil(needed / 1e9))))
 
 
 def _marker_path(ctx, md5):
@@ -181,9 +204,9 @@ def _attempt_due(ctx, md5):
     return age >= TILING_RETRY_SECONDS
 
 
-def _submit_tiler(ctx, md5, name):
+def _submit_tiler(ctx, md5, name, width=None, height=None):
     """Submit the tiling job and record the attempt. Returns (ok, detail)."""
-    argv = job_argv(ctx, md5, name)
+    argv = job_argv(ctx, md5, name, width, height)
     try:
         ok, detail = ctx.submit_job(md5, argv)
     except Exception as exc:                      # noqa: BLE001
@@ -214,11 +237,12 @@ def build_config(ctx, raw_name, polling=False):
     if not meta:
         return {"error": "Database error (found 0 results; should be 1)"}, 200
     width = int(meta["width"])
+    height = int(meta.get("height") or (width // 2))
 
     if not polling:
         try:
             refreshed = _refresh(ctx, name, md5, width, jpg_abs, tile_abs,
-                                 str(meta["timestamp"]))
+                                 str(meta["timestamp"]), height)
         except Exception as exc:                      # noqa: BLE001 - never 500 the viewer
             ctx.log("refresh failed for %r: %s: %s" % (name, type(exc).__name__, exc))
             refreshed = None
@@ -234,7 +258,7 @@ def build_config(ctx, raw_name, polling=False):
     if not polling and width > ctx.max_width and not os.path.isfile(config_path) \
             and _attempt_due(ctx, md5):
         ctx.log("RETILING %r (md5 %s): tiles missing and the last attempt is stale" % (name, md5))
-        _submit_tiler(ctx, md5, name)
+        _submit_tiler(ctx, md5, name, width, height)
 
     if os.path.isfile(config_path):
         try:
@@ -258,7 +282,7 @@ def build_config(ctx, raw_name, polling=False):
     }, 200
 
 
-def _refresh(ctx, name, md5, width, jpg_abs, tile_abs, db_timestamp):
+def _refresh(ctx, name, md5, width, jpg_abs, tile_abs, db_timestamp, height=None):
     """Bring the cache up to date. Returns a dict when the request should end in an error."""
     if not _needs_refresh(ctx, jpg_abs, db_timestamp):
         return None
@@ -275,7 +299,7 @@ def _refresh(ctx, name, md5, width, jpg_abs, tile_abs, db_timestamp):
 
     if width > ctx.max_width:
         preview = thumb_url(name, ctx.max_width)
-        _submit_tiler(ctx, md5, name)
+        _submit_tiler(ctx, md5, name, width, height)
     else:
         preview = source
 
@@ -376,13 +400,14 @@ def production_context(home=None, log=None):
         try:
             with connection.cursor() as cursor:
                 cursor.execute(
-                    "SELECT img_width, img_timestamp FROM image WHERE img_name = %s", (name,))
+                    "SELECT img_width, img_height, img_timestamp FROM image WHERE img_name = %s",
+                    (name,))
                 row = cursor.fetchone()
         finally:
             connection.close()
         if not row:
             return None
-        return {"width": int(row[0]), "timestamp": _text(row[1])}
+        return {"width": int(row[0]), "height": int(row[1]), "timestamp": _text(row[2])}
 
     def fetch(url, limit=None):
         request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})

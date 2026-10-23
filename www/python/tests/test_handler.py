@@ -196,6 +196,9 @@ class LargeImage(Fixture):
                          "docker-registry.tools.wmflabs.org/toolforge-python311-sssd-web:latest")
         self.assertNotIn("tool-panoviewer/tool-panoviewer", " ".join(argv))
         self.assertIn("--mount=all", argv)
+        # the API default is 512Mi/0.1 CPU, which OOM-kills any panorama big enough to need tiling
+        self.assertEqual(argv[argv.index("--mem") + 1], "1Gi")     # 8000x4000 -> 1 GiB
+        self.assertEqual(argv[argv.index("--cpu") + 1], "1")
         self.assertEqual(argv[-1], "pano-" + md5)
         command = argv[argv.index("--command") + 1]
         self.assertIn("tile.py", command)
@@ -307,6 +310,36 @@ class Refresh(Fixture):
         self.write_tiled(LARGE_NAME, mtime_offset=0)
         panoviewer.build_config(self.ctx, LARGE_NAME)
         self.assertEqual(self.jobs, [])
+
+
+class TilerMemory(Fixture):
+    """A tiling job must be given memory proportional to the panorama, or it is OOM-killed."""
+
+    def test_small_images_get_the_floor(self):
+        self.assertEqual(panoviewer.tiler_memory_gib(4096, 2048), 1)
+
+    def test_a_26k_panorama_gets_the_ceiling(self):
+        # 26000x13000 decodes to ~1.0 GB, plus six 8272px cube faces
+        self.assertEqual(panoviewer.tiler_memory_gib(26000, 13000), 4)
+
+    def test_a_14k_panorama_gets_two(self):
+        self.assertEqual(panoviewer.tiler_memory_gib(14304, 7152), 2)
+
+    def test_never_below_one_or_above_the_platform_ceiling(self):
+        for width in (0, 1, 400, 4096, 26000, 100000):
+            value = panoviewer.tiler_memory_gib(width, max(1, width // 2))
+            self.assertGreaterEqual(value, 1, width)
+            self.assertLessEqual(value, 4, width)
+
+    def test_a_missing_height_is_derived_from_the_width(self):
+        self.assertEqual(panoviewer.tiler_memory_gib(26000, None),
+                         panoviewer.tiler_memory_gib(26000, 13000))
+
+    def test_the_job_argv_carries_the_size_for_a_big_image(self):
+        self.rows[LARGE_NAME] = {"width": 26000, "height": 13000, "timestamp": stamp(-60)}
+        panoviewer.build_config(self.ctx, LARGE_NAME)
+        argv = self.jobs[0]
+        self.assertEqual(argv[argv.index("--mem") + 1], "4Gi")
 
 
 class StuckPending(Fixture):

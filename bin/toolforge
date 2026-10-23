@@ -1,48 +1,65 @@
 #!/bin/bash
+# Fake toolforge CLI — the jobs API accepts a POST directly, which is how the web handler
+# launches the tiler without a shell-out to the real CLI.
+#
+# The API's own field names (read back from a CLI-created job, 2026-10-23):
+#   name, cmd, image/imagename, mount, memory, cpu, retry, filelog, emails
+# The real CLI resolves --image python3.11 to a registry reference AND maps --mem/--cpu;
+# this shim talks to the API, so it must send the resolved image (see panoviewer.job_argv)
+# and the memory/cpu itself.
+#
+# Usage: toolforge jobs run --image <ref> --mount=all --command <cmd> [--mem 4Gi] [--cpu 1] <name>
+set -euo pipefail
 
 usage() {
-  echo "Fake toolforge CLI"
-  echo "Usage: toolforge jobs run --image <image> --mount=all --command <command> <name>"
+  cat >&2 <<'EOF'
+Fake toolforge CLI
+Usage: toolforge jobs run --image <ref> --mount=all --command <cmd> [--mem 4Gi] [--cpu 1] <name>
+EOF
 }
 
-dieUsage() {
-  usage 1>&2
-  exit 1
-}
+image=""; command=""; mount="all"; memory=""; cpu=""; name=""
 
-if [ $1 != "jobs" ]; then
-  dieUsage
-fi
+[ "${1:-}" = "jobs" ] || { usage; exit 1; }
+shift
+[ "${1:-}" = "run" ]  || { usage; exit 1; }
+shift
 
-if [ $2 != "run" ]; then
-  dieUsage
-fi
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --image)     image="${2:-}";   shift 2 ;;
+    --image=*)   image="${1#*=}";  shift ;;
+    --mount)     mount="${2:-}";   shift 2 ;;
+    --mount=*)   mount="${1#*=}";  shift ;;
+    --command)   command="${2:-}"; shift 2 ;;
+    --command=*) command="${1#*=}"; shift ;;
+    --mem)       memory="${2:-}";  shift 2 ;;
+    --mem=*)     memory="${1#*=}"; shift ;;
+    --cpu)       cpu="${2:-}";     shift 2 ;;
+    --cpu=*)     cpu="${1#*=}";    shift ;;
+    --retry)     shift 2 ;;      # accepted by the API, not used here
+    --filelog)   shift ;;
+    -*)          echo "unknown option: $1" >&2; usage; exit 1 ;;
+    *)           if [ -z "$name" ]; then name="$1"; shift; else echo "unexpected argument: $1" >&2; usage; exit 1; fi ;;
+  esac
+done
 
-if [ $3 != '--image' ]; then
-  dieUsage
-fi
+[ -n "$image" ] && [ -n "$command" ] && [ -n "$name" ] || { usage; exit 1; }
 
-image="$4"
-
-if [ $5 != '--mount=all' ];then
-  dieUsage
-fi
-
-if [ $6 != '--command' ]; then
-  dieUsage
-fi
-
-command="$7"
-name="$8"
 dataDir="${TOOL_DATA_DIR:-$HOME}"
-# The tool name used to be hardcoded, which meant the staging copy submitted its jobs to
-# the LIVE tool's queue. Derive it from the data dir instead; TOOL_NAME overrides.
+# The tool name used to be hardcoded, which meant a staging copy submitted its jobs to the
+# live tool's queue. Derive it from the data dir; TOOL_NAME overrides.
 TOOL_NAME="${TOOL_NAME:-$(basename "$dataDir")}"
 
 jq -n --arg name "$name" \
-  --arg command "$command" \
-  --arg image "$image" \
-  '{name: $name, cmd: $command, imagename: $image, mount: "all"}' | \
+      --arg command "$command" \
+      --arg image "$image" \
+      --arg mount "$mount" \
+      --arg memory "$memory" \
+      --arg cpu "$cpu" \
+  '({name: $name, cmd: $command, imagename: $image, mount: $mount}
+    + (if $memory != "" then {memory: $memory} else {} end)
+    + (if $cpu != "" then {cpu: $cpu} else {} end))' | \
   curl -X POST \
   -H "content-type: application/json" \
   --data @- \
@@ -50,6 +67,3 @@ jq -n --arg name "$name" \
   --cert "$dataDir/.toolskube/client.crt" \
   --key "$dataDir/.toolskube/client.key" \
   "https://api.svc.tools.eqiad1.wikimedia.cloud:30003/jobs/v1/tool/${TOOL_NAME}/jobs/"
-
-# exit status now reflects the API's answer; on failure the body is on stdout and the
-# message on stderr, so a caller that checks $? (like the ported handler) can log why.

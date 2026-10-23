@@ -46,4 +46,4 @@ jq -n --arg name "$name" \
   --insecure --silent \
   --cert "$dataDir/.toolskube/client.crt" \
   --key "$dataDir/.toolskube/client.key" \
-  https://api.svc.tools.eqiad1.wikimedia.cloud:30003/jobs/api/v1/jobs/
+  https://api.svc.tools.eqiad1.wikimedia.cloud:30003/jobs/v1/tool/panoviewer/jobs/

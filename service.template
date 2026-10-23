@@ -1,2 +1,12 @@
+# Toolforge webservice template — read by `toolforge webservice start|restart`.
+#
+# MEASURED 2026-10-23: on `restart`, this file OVERRIDES the flags given on the
+# command line. Starting with `--health-check-path /healthz` still produced a pod
+# whose startup probe hit /health.php (statuscode 404, pod never Ready), because
+# this template said so. Whatever path is named here MUST be served by the app.
+#
+# This branch is the python3.11 port, so the template names its type and its
+# health route. `master` keeps the historical php7.4 configuration untouched.
 backend: kubernetes
-health-check-path: /health.php
+type: python3.11
+health-check-path: /healthz

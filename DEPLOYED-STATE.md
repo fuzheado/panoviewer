@@ -70,3 +70,18 @@ the deploy *source* is one command away from the original:
 ```bash
 git -C /data/project/panoviewer remote set-url origin https://gitlab.wikimedia.org/toolforge-repos/panoviewer.git
 ```
+
+## Staging (panoviewer2)
+
+`panoviewer2` is the staging copy: same code, branch `port/python`, runtime `python3.11`, health check `/healthz`.
+Measured there on 2026-10-23: pod `1/1 Running` ~7 s after `start`; `/healthz` reports pymysql 2.2.8 from
+`$HOME/www/python/venv` and the real query against `commonswiki_p` returning `4096x2048` in ~60 ms.
+
+Two traps found by running it, both recorded in `php-probe/PORT-panoviewer-off-php.md`:
+
+1. **`service.template` overrides `--health-check-path` on `restart`.** Starting with `/healthz` still produced a pod
+   probing `/health.php` (404, never Ready). The template is the authority, not the flag.
+2. **The python3.11 image does not serve `public_html`.** uWSGI runs the WSGI app only; `/src/...` is a 404 unless the
+   app serves it. The port therefore has to serve `/`, `/src/**` and `/cache/**` itself.
+
+The venv at `www/python/venv` is gitignored: it must be created *inside a pod* (a bastion venv is the wrong interpreter).

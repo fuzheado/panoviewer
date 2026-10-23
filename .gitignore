@@ -33,3 +33,9 @@
 # junk from a working docroot, also untracked on the deployment
 /error.log
 /vendor/
+
+# the python3.11 runtime loads libraries from this venv, which lives on NFS next to
+# the code. Never commit it: thousands of files, and it is rebuilt inside a pod.
+/www/python/venv/
+__pycache__/
+*.pyc

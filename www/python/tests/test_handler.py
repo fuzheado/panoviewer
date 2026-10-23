@@ -176,7 +176,7 @@ class LargeImage(Fixture):
         self.assertTrue(payload["multires_pending"])
         # the fetch goes to thumb.php?w=4000, but the response points at the LOCAL copy of it,
         # exactly as config.php did -- same-origin, cached on disk, no hotlinking to commons
-        thumb_fetches = [u for u, _ in self.fetches if "thumb.php?w=4000" in u]
+        thumb_fetches = [u for u, _ in self.fetches if "thumb.php?w=%d" % panoviewer.PREVIEW_WIDTH in u]
         self.assertEqual(len(thumb_fetches), 1)
         self.assertIn(urllib.parse.quote(LARGE_NAME, safe=""), thumb_fetches[0])
         self.assertEqual(payload["pannellum"]["panorama"],

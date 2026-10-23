@@ -4,8 +4,8 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Panorama Viewer</title>
-    <script type="text/javascript" src="https://tools-static.wmflabs.org/cdnjs/ajax/libs/jquery/3.0.0/jquery.min.js"></script>
-    <script type="text/javascript" src="https://tools-static.wmflabs.org/cdnjs/ajax/libs/jquery-noty/2.3.8/packaged/jquery.noty.packaged.min.js"></script>
+    <script type="text/javascript" src="vendor/jquery.min.js"></script>
+    <script type="text/javascript" src="vendor/jquery.noty.packaged.min.js"></script>
     <link rel="stylesheet" href="src/css/pannellum.css"/>
     <script type="text/javascript" src="src/js/libpannellum.js"></script>
     <script type="text/javascript" src="src/js/pannellum.js"></script>
@@ -44,6 +44,16 @@
 <script>
 // passed in file name
 var f = decodeURIComponent(location.hash.substring(1));
+
+// Polling schedule. Tiling takes 15 s to several minutes, so a fixed 5 s poll hammers the server to
+// learn one thing. This keeps the first minute responsive and then backs off.
+var pollStarted = Date.now();
+function pollDelay() {
+  var elapsed = (Date.now() - pollStarted) / 1000;
+  if (elapsed < 60) return 5000;
+  if (elapsed < 300) return 15000;
+  return 30000;
+}
 // container to hold the pannellum viewer
 var p = $('#panorama');
 
@@ -75,7 +85,7 @@ function recheck()
       clearTimeout(handler);
       handler = null;
     } else if (data.multires_pending) {
-      handler = setTimeout(recheck, 5000);
+      handler = setTimeout(recheck, pollDelay());
     }
   }
 
@@ -107,7 +117,7 @@ function configLoaded(data)
   // display a message if a multiresolution build is pending
   if ('multires_pending' in data && data.multires_pending) {
     noty({ text: "A better version is being prepared - I'll let you know when it is done", type: 'information' });
-    handler = setTimeout(recheck, 5000);
+    handler = setTimeout(recheck, pollDelay());
 
     // make sure polling only happens when the window is active
     $(window).on('focus.multires_poll', function() {

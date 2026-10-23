@@ -35,11 +35,21 @@ import mimetypes
 import os
 import shutil
 import subprocess
+import threading
 import time
 import urllib.parse
 import urllib.request
 
 MAX_WIDTH = 4000
+# The interim preview shown while a panorama is being tiled. 4000 was the old choice and produced a
+# 1.9-2.0 MB JPEG; the browser window is ~1920px wide, so 2048 is indistinguishable there for a third
+# of the bytes. Tiling still starts at MAX_WIDTH.
+PREVIEW_WIDTH = 2048
+# How long a replica lookup may be reused. One /config costs a connect+SELECT (~116 ms measured from
+# inside the pod) and the viewer polls while a panorama tiles, so this is the difference between a
+# query every request and a query every half minute.
+METADATA_TTL = 30
+
 # If a panorama is still untitled after an attempt, try again -- but not on every request. The marker
 # file lives beside the cache entry; see _attempt_due().
 TILING_RETRY_SECONDS = 900
@@ -111,7 +121,7 @@ def looks_like_jpeg(head):
 class Context(object):
     def __init__(self, home, public_dir=None, data_dir=None, max_width=MAX_WIDTH,
                  metadata=None, fetch=None, submit_job=None, log=None,
-                 job_image=None, tool_name=None, clock=None):
+                 job_image=None, tool_name=None, clock=None, preview_width=None):
         self.home = home
         self.data_dir = data_dir or home
         self.public_dir = public_dir or os.path.join(home, "public_html")
@@ -124,6 +134,7 @@ class Context(object):
         self.job_image = job_image or DEFAULT_JOB_IMAGE
         self.tool_name = tool_name or os.path.basename(home.rstrip("/")) or "panoviewer"
         self.clock = clock or (lambda: time.time())
+        self.preview_width = preview_width or PREVIEW_WIDTH
 
     # paths, all relative to the docroot because the browser resolves them against the page
     def jpg_rel(self, md5):
@@ -147,6 +158,35 @@ def _needs_refresh(ctx, jpg_path, db_timestamp):
     if not os.path.isfile(jpg_path):
         return True
     return str(db_timestamp) > _mtime_stamp(jpg_path)
+
+
+class MetadataCache(object):
+    """Memoise the replica lookup for `ttl` seconds.
+
+    A miss is never cached: an image uploaded a moment ago must be visible immediately, and a wrong
+    "no such file" is worse than one extra query.
+    """
+
+    def __init__(self, loader, ttl=None, clock=None):
+        self._loader = loader
+        self._ttl = METADATA_TTL if ttl is None else ttl
+        self._clock = clock or time.time
+        self._entries = {}
+
+    def __call__(self, name):
+        now = self._clock()
+        hit = self._entries.get(name)
+        if hit is not None and hit[0] > now:
+            return hit[1]
+        value = self._loader(name)
+        if value is None:
+            self._entries.pop(name, None)
+        else:
+            self._entries[name] = (now + self._ttl, value)
+        return value
+
+    def __len__(self):
+        return len(self._entries)
 
 
 # ── the tiler ────────────────────────────────────────────────────────────────────────────────────
@@ -366,7 +406,7 @@ def _refresh(ctx, name, md5, width, jpg_abs, tile_abs, db_timestamp, height=None
         shutil.rmtree(tile_abs, ignore_errors=True)
 
     if width > ctx.max_width and is_full_equirectangular(width, height):
-        preview = thumb_url(name, ctx.max_width)
+        preview = thumb_url(name, ctx.preview_width)
         # fresh content: this is not a retry, so the attempt budget starts again
         _submit_tiler(ctx, md5, name, width, height, fresh=True)
     else:
@@ -458,25 +498,57 @@ def production_context(home=None, log=None):
     home = home or os.environ.get("HOME") or os.getcwd()
     logger = log or (lambda message: print(message, flush=True))
 
-    def metadata(name):
+    db = {"connection": None}
+    db_lock = threading.Lock()
+
+    def _connection():
+        """One connection per worker process, reopened if it died.
+
+        Each uWSGI worker is a separate process, so the connection is not shared; the lock is there in
+        case the service is ever run with threads (pymysql connections are not thread-safe).
+        """
         import pymysql                                    # imported lazily: /healthz must not need it
+        connection = db["connection"]
+        if connection is not None:
+            try:
+                connection.ping(reconnect=True)
+                return connection
+            except Exception:                             # noqa: BLE001 - discard and reconnect
+                try:
+                    connection.close()
+                except Exception:                         # noqa: BLE001
+                    pass
+                db["connection"] = None
         connection = pymysql.connect(
             host=os.environ.get("PANOVIEWER_DB_HOST", "commonswiki.labsdb"),
             user=os.environ.get("TOOL_REPLICA_USER"),
             password=os.environ.get("TOOL_REPLICA_PASSWORD"),
             database="commonswiki_p", connect_timeout=5, read_timeout=5,
         )
-        try:
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    "SELECT img_width, img_height, img_timestamp FROM image WHERE img_name = %s",
-                    (name,))
-                row = cursor.fetchone()
-        finally:
-            connection.close()
+        db["connection"] = connection
+        return connection
+
+    def _load_metadata(name):
+        with db_lock:
+            connection = _connection()
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT img_width, img_height, img_timestamp FROM image WHERE img_name = %s",
+                        (name,))
+                    row = cursor.fetchone()
+            except Exception:                             # noqa: BLE001
+                try:
+                    connection.close()
+                except Exception:                         # noqa: BLE001
+                    pass
+                db["connection"] = None
+                raise
         if not row:
             return None
         return {"width": int(row[0]), "height": int(row[1]), "timestamp": _text(row[2])}
+
+    metadata = MetadataCache(_load_metadata)
 
     def fetch(url, limit=None):
         request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})

@@ -69,7 +69,7 @@ def plan(cache_dir, pages, attempts_max=None, include_unseen=False):
     """
     attempts_max = attempts_max or panoviewer.TILING_MAX_ATTEMPTS
     decisions = {"tiled": 0, "too_small": 0, "capped": 0, "no_info": 0,
-                 "not_cached": 0, "queue": []}
+                 "not_cached": 0, "not_equirect": 0, "queue": []}
     for page in pages:
         info = (page.get("imageinfo") or [{}])[0]
         title = page.get("title", "")
@@ -87,6 +87,11 @@ def plan(cache_dir, pages, attempts_max=None, include_unseen=False):
             continue
         if width <= panoviewer.MAX_WIDTH:
             decisions["too_small"] += 1
+            continue
+        if not panoviewer.is_full_equirectangular(width, height):
+            # a cylindrical strip or a partial panorama: generate.py cannot cube it, so a job here
+            # would fail 5 times and be capped. Measured: 3 of 3 such jobs failed in ~1-4 s.
+            decisions["not_equirect"] += 1
             continue
         if not include_unseen and not os.path.isfile(os.path.join(cache_dir, md5 + ".jpg")):
             # never viewed: nothing has been served, so nothing can look hazy
@@ -152,14 +157,14 @@ def main(argv=None):
             continuation = json.load(handle)
 
     totals = {"scanned": 0, "tiled": 0, "too_small": 0, "capped": 0, "no_info": 0,
-              "not_cached": 0, "queued": 0, "failed": 0}
+              "not_cached": 0, "not_equirect": 0, "queued": 0, "failed": 0}
     while totals["scanned"] < args.limit:
         pages, continuation = fetch_page(args.category, continuation, args.page_size, args.interval)
         if not pages:
             break
         totals["scanned"] += len(pages)
         decisions = plan(cache_dir, pages, include_unseen=args.include_unseen)
-        for key in ("tiled", "too_small", "capped", "no_info", "not_cached"):
+        for key in ("tiled", "too_small", "capped", "no_info", "not_cached", "not_equirect"):
             totals[key] += decisions[key]
         if args.apply and decisions["queue"]:
             room = args.max_jobs - totals["queued"]
@@ -193,6 +198,7 @@ def main(argv=None):
           % dict(totals, limit=panoviewer.TILING_MAX_ATTEMPTS))
     print("  no size info  : %(no_info)d" % totals)
     print("  never viewed  : %(not_cached)d  (skipped: nothing served, nothing to repair)" % totals)
+    print("  not 2:1       : %(not_equirect)d  (partial/cylindrical: cannot be cubed, shown as-is)" % totals)
     print("  %(label)s: %(queued)d   failed: %(failed)d"
           % dict(totals, label="queued" if args.apply else "would queue"))
     if continuation:

@@ -103,6 +103,15 @@ class Decisions(SweepFixture):
         self.assertEqual(result["queue"][0]["name"], "Lower_case_name.jpg")
 
 
+class Aspect(SweepFixture):
+    def test_a_partial_panorama_is_skipped(self):
+        # generate.py refuses these; a job would fail and burn the attempt budget
+        self.make_preview("Strip.jpg")
+        result = sweep_tiler.plan(self.cache, [page("Strip.jpg", 14740, 1825)])
+        self.assertEqual(result["not_equirect"], 1)
+        self.assertEqual(result["queue"], [])
+
+
 class Submission(SweepFixture):
     def test_it_queues_with_memory_sized_for_the_image(self):
         calls = []

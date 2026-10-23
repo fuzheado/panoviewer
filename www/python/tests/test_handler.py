@@ -476,6 +476,39 @@ class RetryCap(Fixture):
             self.assertEqual(handle.read().strip(), "1")
 
 
+class PartialPanorama(Fixture):
+    """A non-2:1 image cannot be cubed; the viewer must stop promising that it will be."""
+
+    def test_a_cylindrical_strip_is_not_pending(self):
+        self.add_row("Strip_Panorama.jpg", width=14740)
+        self.rows["Strip_Panorama.jpg"]["height"] = 1825
+        payload, _ = panoviewer.build_config(self.ctx, "Strip_Panorama.jpg")
+        self.assertFalse(payload["multires_pending"], "nothing is being prepared for a partial pano")
+        self.assertTrue(payload["partial_panorama"])
+        self.assertEqual(self.jobs, [], "no job may be spent on it")
+
+    def test_it_still_serves_the_image(self):
+        self.add_row("Strip_Panorama.jpg", width=14740)
+        self.rows["Strip_Panorama.jpg"]["height"] = 1825
+        payload, _ = panoviewer.build_config(self.ctx, "Strip_Panorama.jpg")
+        self.assertEqual(payload["pannellum"]["width"], 14740)
+        self.assertIn("panorama", payload["pannellum"])
+
+    def test_a_two_to_one_image_is_still_tiled(self):
+        self.rows[LARGE_NAME] = {"width": 8000, "height": 4000, "timestamp": stamp(-60)}
+        payload, _ = panoviewer.build_config(self.ctx, LARGE_NAME)
+        self.assertTrue(payload["multires_pending"])
+        self.assertNotIn("partial_panorama", payload)
+        self.assertEqual(len(self.jobs), 1)
+
+    def test_the_ratio_test(self):
+        self.assertTrue(panoviewer.is_full_equirectangular(8000, 4000))
+        self.assertTrue(panoviewer.is_full_equirectangular(2048, 1024))
+        self.assertFalse(panoviewer.is_full_equirectangular(14740, 1825))
+        self.assertFalse(panoviewer.is_full_equirectangular(6000, 4000))
+        self.assertFalse(panoviewer.is_full_equirectangular(8000, 0))
+
+
 class Errors(Fixture):
     def test_missing_filename(self):
         payload, status = panoviewer.build_config(self.ctx, "")

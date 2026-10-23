@@ -175,6 +175,22 @@ def job_argv(ctx, md5, name, width=None, height=None):
             "--command", command, "pano-" + md5]
 
 
+def is_full_equirectangular(width, height, tolerance=0.02):
+    """Only a 2:1 image is a full equirectangular panorama, which is what the tiler can cube.
+
+    `generate.py` refuses anything else without `--haov`/`--vaov`:
+
+        Unless given the --haov option, equirectangular input image must be a full (not partial) panorama!
+
+    Those files therefore never tiled -- not on this code, and not on the PHP -- and the viewer promised
+    "a better version is being prepared" for ever. A cylindrical strip (8:1) is the common case. They are
+    still served, at their native size; there is simply no cube version to make.
+    """
+    if not width or not height:
+        return False
+    return abs(float(width) / height - 2.0) <= 2.0 * tolerance
+
+
 def tiler_memory_gib(width, height=None):
     """Memory the tiling job must be given.
 
@@ -277,8 +293,8 @@ def build_config(ctx, raw_name, polling=False):
     # tiler that was blocked, or a cache directory cleaned up -- has a fresh preview and no config.json,
     # so no refresh happens and, before this, no job was ever submitted again. The viewer then polls
     # "a better version is being prepared" for ever. Retry on request, at most once per window.
-    if not polling and width > ctx.max_width and not os.path.isfile(config_path) \
-            and _attempt_due(ctx, md5):
+    if not polling and width > ctx.max_width and is_full_equirectangular(width, height) \
+            and not os.path.isfile(config_path) and _attempt_due(ctx, md5):
         ctx.log("RETILING %r (md5 %s): tiles missing and the last attempt is stale" % (name, md5))
         _submit_tiler(ctx, md5, name, width, height)
 
@@ -298,10 +314,17 @@ def build_config(ctx, raw_name, polling=False):
             config["autoLoad"] = True
             return {"pannellum": config, "width": width}, 200
 
-    return {
-        "multires_pending": width > ctx.max_width,
+    equirect = is_full_equirectangular(width, height)
+    payload = {
+        # reporting "pending" for a partial panorama is what made the viewer say "a better version is
+        # being prepared" for ever; there is no such version and never will be.
+        "multires_pending": width > ctx.max_width and equirect,
         "pannellum": {"panorama": ctx.jpg_rel(md5), "width": width, "autoLoad": True},
-    }, 200
+    }
+    if not equirect:
+        # only present when it applies, so the ordinary response keeps the exact shape of the PHP's
+        payload["partial_panorama"] = True
+    return payload, 200
 
 
 def _refresh(ctx, name, md5, width, jpg_abs, tile_abs, db_timestamp, height=None):
@@ -319,7 +342,7 @@ def _refresh(ctx, name, md5, width, jpg_abs, tile_abs, db_timestamp, height=None
     if os.path.isdir(tile_abs):
         shutil.rmtree(tile_abs, ignore_errors=True)
 
-    if width > ctx.max_width:
+    if width > ctx.max_width and is_full_equirectangular(width, height):
         preview = thumb_url(name, ctx.max_width)
         # fresh content: this is not a retry, so the attempt budget starts again
         _submit_tiler(ctx, md5, name, width, height, fresh=True)

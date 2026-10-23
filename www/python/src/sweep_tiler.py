@@ -127,7 +127,14 @@ def submit(items, home, cache_dir, job_image=None, run=None, log=print):
             ok, done = False, exc
         if ok:
             submitted += 1
-            panoviewer._submit_tiler(ctx, item["md5"], item["name"], item["width"], item["height"])
+            # record the attempt WITHOUT submitting again: _submit_tiler would run the shim a second
+            # time, which the API rejects as a duplicate job name and which used to look like a failure
+            try:
+                marker = panoviewer._marker_path(ctx, item["md5"])
+                with open(marker, "w") as handle:
+                    handle.write(str(panoviewer._attempt_count(ctx, item["md5"]) + 1))
+            except OSError:
+                pass
         else:
             failed += 1
             log("  could not queue %s: %s" % (item["name"], getattr(done, "stderr", done)))

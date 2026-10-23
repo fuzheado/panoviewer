@@ -86,7 +86,8 @@ def default_execute(argv, env=None):
     return done
 
 
-def run(cache_dir, md5, name, home=None, fetch=download, execute=None, log=print):
+def run(cache_dir, md5, name, home=None, fetch=download, execute=None, log=print,
+        haov=None, vaov=None):
     """Generate tiles. Returns the tile directory. Raises on failure (after cleaning up)."""
     home = home or os.environ.get("TOOL_DATA_DIR") or os.environ.get("HOME") or os.getcwd()
     nona = os.path.join(home, "bin", "nona")
@@ -108,7 +109,12 @@ def run(cache_dir, md5, name, home=None, fetch=download, execute=None, log=print
         if os.path.isdir(multi):
             shutil.rmtree(multi, ignore_errors=True)
         log("tiling %s -> %s" % (full, multi))
-        execute([sys.executable, generate, "--nona=" + nona, "-o", multi, full])
+        argv = [sys.executable, generate, "--nona=" + nona, "-o", multi, full]
+        # generate.py only assumes 360x180 when width/height is EXACTLY 2, and exits otherwise. A
+        # panorama that is 2:1 to within a rounding error is still a full panorama, so say so.
+        if haov is not None and vaov is not None:
+            argv += ["--haov", str(haov), "--vaov", str(vaov)]
+        execute(argv)
         if not os.path.isfile(os.path.join(multi, "config.json")):
             raise RuntimeError("generate.py produced no config.json in %s" % multi)
         log("done: %s" % multi)
@@ -133,12 +139,16 @@ def main(argv=None):
     parser.add_argument("cache_dir", help="directory holding the cache (usually <home>/public_html/cache)")
     parser.add_argument("md5", help="md5 of the normalised file name")
     parser.add_argument("name", help="URL-encoded Commons file name")
+    parser.add_argument("--haov", type=float, default=None,
+                        help="horizontal field of view in degrees (needed when width/height isn't exactly 2)")
+    parser.add_argument("--vaov", type=float, default=None, help="vertical field of view in degrees")
     args = parser.parse_args(argv)
 
     name = urllib.parse.unquote(args.name)
     started = time.time()
     try:
-        run(args.cache_dir, args.md5, urlencoded_name(name), log=log_line)
+        run(args.cache_dir, args.md5, urlencoded_name(name), log=log_line,
+            haov=args.haov, vaov=args.vaov)
     except Exception as exc:                                   # noqa: BLE001
         log_line("FAILED after %.1fs: %s: %s" % (time.time() - started, type(exc).__name__, exc))
         return 1

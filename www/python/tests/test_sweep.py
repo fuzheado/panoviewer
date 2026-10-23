@@ -121,6 +121,7 @@ class Submission(SweepFixture):
             items, home=self.cache, cache_dir=self.cache,
             run=lambda argv: calls.append(argv) or type("R", (), {"returncode": 0})())
         self.assertEqual((submitted, failed), (1, 0))
+        self.assertEqual(len(calls), 1, "one submission per item, not two")
         argv = calls[0]
         self.assertEqual(argv[argv.index("--mem") + 1], "4Gi")
         self.assertEqual(argv[-1], "pano-" + items[0]["md5"])

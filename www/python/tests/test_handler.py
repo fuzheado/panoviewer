@@ -406,6 +406,23 @@ class StuckPending(Fixture):
         self.assertEqual(len(self.jobs), 1, "exactly one submission, not two")
 
 
+class Geometry(Fixture):
+    """generate.py only infers 360x180 at exactly 2:1; near-2:1 needs the coverage declared."""
+
+    def test_flags_are_added_for_a_near_two_to_one_image(self):
+        self.rows["Near.jpg"] = {"width": 7300, "height": 3632, "timestamp": stamp(-60)}
+        panoviewer.build_config(self.ctx, "Near.jpg")
+        command = self.jobs[0][self.jobs[0].index("--command") + 1]
+        self.assertIn("--haov 360", command)
+        self.assertIn("--vaov 180", command)
+
+    def test_no_flags_for_an_exact_two_to_one_image(self):
+        self.rows["Exact.jpg"] = {"width": 8000, "height": 4000, "timestamp": stamp(-60)}
+        panoviewer.build_config(self.ctx, "Exact.jpg")
+        command = self.jobs[0][self.jobs[0].index("--command") + 1]
+        self.assertNotIn("--haov", command)
+
+
 class RetryCap(Fixture):
     """A file that can never tile must stop being retried."""
 

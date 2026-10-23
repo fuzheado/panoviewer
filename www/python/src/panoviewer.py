@@ -167,6 +167,9 @@ def job_argv(ctx, md5, name, width=None, height=None):
         shell_arg(md5),
         shell_arg(urllib.parse.quote(name, safe="")),
     )
+    geometry = tiling_geometry(width, height)
+    if geometry and geometry[0] != "infer":
+        command += " --haov %s --vaov %s" % geometry
     return [os.path.join(ctx.home, "bin", "toolforge"), "jobs", "run",
             "--image", ctx.job_image, "--mount=all",
             # without these two the job gets the API default of 512Mi / 0.1 CPU and is OOM-killed
@@ -189,6 +192,21 @@ def is_full_equirectangular(width, height, tolerance=0.02):
     if not width or not height:
         return False
     return abs(float(width) / height - 2.0) <= 2.0 * tolerance
+
+
+def tiling_geometry(width, height):
+    """Return (haov, vaov) to declare, or None if the image cannot be cubed.
+
+    `generate.py` assumes 360x180 only when `width/height == 2` **exactly**, and exits otherwise; a
+    panorama that is 2:1 to within a rounding error therefore failed with "must be a full (not partial)
+    panorama". Declaring the coverage makes those tile, which is the intent. Anything further from 2:1
+    is a cylindrical strip or a genuine partial panorama: no cube version exists for it.
+    """
+    if not is_full_equirectangular(width, height):
+        return None
+    if int(width) == 2 * int(height):
+        return ("infer", "infer")      # exact 2:1: let generate.py infer it, as before
+    return (360, 180)
 
 
 def tiler_memory_gib(width, height=None):

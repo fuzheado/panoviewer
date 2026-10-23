@@ -35,6 +35,9 @@ fi
 command="$7"
 name="$8"
 dataDir="${TOOL_DATA_DIR:-$HOME}"
+# The tool name used to be hardcoded, which meant the staging copy submitted its jobs to
+# the LIVE tool's queue. Derive it from the data dir instead; TOOL_NAME overrides.
+TOOL_NAME="${TOOL_NAME:-$(basename "$dataDir")}"
 
 jq -n --arg name "$name" \
   --arg command "$command" \
@@ -43,7 +46,10 @@ jq -n --arg name "$name" \
   curl -X POST \
   -H "content-type: application/json" \
   --data @- \
-  --insecure --silent \
+  --insecure --silent --fail-with-body \
   --cert "$dataDir/.toolskube/client.crt" \
   --key "$dataDir/.toolskube/client.key" \
-  https://api.svc.tools.eqiad1.wikimedia.cloud:30003/jobs/v1/tool/panoviewer/jobs/
+  "https://api.svc.tools.eqiad1.wikimedia.cloud:30003/jobs/v1/tool/${TOOL_NAME}/jobs/"
+
+# exit status now reflects the API's answer; on failure the body is on stdout and the
+# message on stderr, so a caller that checks $? (like the ported handler) can log why.

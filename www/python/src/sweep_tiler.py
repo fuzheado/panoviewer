@@ -171,7 +171,9 @@ def main(argv=None):
             for item in decisions["queue"]:
                 print("  would queue: %s (%dx%d)" % (item["name"], item["width"], item["height"]))
             totals["queued"] += len(decisions["queue"])
-        if not continuation or totals["queued"] >= args.max_jobs:
+        # --max-jobs bounds *queueing*. In a dry run it must not cut the walk short, or the report
+        # would understate the backlog.
+        if not continuation or (args.apply and totals["queued"] >= args.max_jobs):
             break
 
     if args.cursor and continuation:

@@ -63,7 +63,12 @@ Two things it needs that are **not in git**, and must exist on the tool account:
 | `nona` | `<home>/bin/nona` | Hugin's projector; 6.9 MB, sha256 `31763e23…` |
 | jammy libraries | `<home>/lib/nona-jammy/` (57 files, 15 MB) | `nona` is an Ubuntu 22.04 binary; the job image is Debian 12. Missing: libIlmImf-2_5, libHalf-2_5, libjpeg.so.8, libtiff.so.5, libpng16.so.16, libexiv2.so.27, libOpenGL/libGLX/libGLU/libGLEW, libboost_filesystem 1.74, libpano13, libwebp/libjbig/libdeflate |
 
-`tile.py` puts that directory on `LD_LIBRARY_PATH` for the `generate.py` subprocess only. Rebuild the
+`tile.py` puts that directory on `LD_LIBRARY_PATH` for the `generate.py` subprocess only.
+
+**Memory matters as much as the libraries.** The jobs API defaults to 512 MiB and 0.1 CPU; decoding a
+26,000×13,000 panorama alone needs ~1 GB, so such a job is SIGKILLed by the OOM killer with no error at
+all (and no chance for `finally` to clean up). The handler sizes each job from the image geometry —
+`tiler_memory_gib(width, height)` — and requests a full CPU. Rebuild the
 bundle by extracting the jammy packages from `archive.ubuntu.com` with `dpkg-deb -x` (no root needed); the
 package list is in that table's "Missing" column, and `Aptfile` in this repo is the historical record.
 

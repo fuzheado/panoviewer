@@ -1,0 +1,8 @@
+# Libraries loaded by the python3.11 webservice come from $HOME/www/python/venv
+# (Help:Toolforge/Web/Python: "On the Kubernetes backend, you must use a virtual
+# environment to install and load any libraries you depend on outside of the
+# Python standard library"). Create it INSIDE a webservice pod -- a venv made on
+# the bastion is the wrong interpreter and will not load.
+#
+# pymysql is pure Python, so it installs with no compiler and no system packages.
+pymysql>=1.1,<2

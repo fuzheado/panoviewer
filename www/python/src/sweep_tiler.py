@@ -149,7 +149,10 @@ def main(argv=None):
     parser.add_argument("--page-size", type=int, default=50, help="files per API request (max 50)")
     parser.add_argument("--interval", type=float, default=1.0, help="seconds between API requests")
     parser.add_argument("--cursor", default=None, help="file holding the API continuation token")
-    parser.add_argument("--max-jobs", type=int, default=25, help="stop queueing after this many (default 25)")
+    # The tool's namespace has an 8GiB *total* memory limit, and a tiling job asks for up to 4GiB, so a
+    # large batch would be rejected by quota rather than run. Three is the practical ceiling for the
+    # biggest panoramas; small ones use 1GiB each.
+    parser.add_argument("--max-jobs", type=int, default=3, help="stop queueing after this many (default 3)")
     parser.add_argument("--include-unseen", action="store_true",
                         help="also tile files nobody has opened (pre-generates cache; off by default)")
     parser.add_argument("--apply", action="store_true", help="actually queue jobs (default: report only)")

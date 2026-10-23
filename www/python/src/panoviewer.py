@@ -293,6 +293,13 @@ def resolve_static(ctx, url_path):
     """
     if "\x00" in url_path:
         return None, 403
+
+    # Never hand out a .php file as text. Under lighttpd these were EXECUTED; a static server would
+    # serve the source instead -- measured on staging 2026-10-23: /health.php and /cache.php came back
+    # as application/octet-stream starting with "<?php". The ported handler answers /config.php as a
+    # route, so nothing legitimate needs a .php file from the docroot.
+    if url_path.lower().endswith(".php"):
+        return None, 404
     relative = urllib.parse.unquote(url_path).lstrip("/")
     if relative in ("", "."):
         relative = "index.html"

@@ -371,6 +371,13 @@ class Static(Fixture):
         path, status = panoviewer.resolve_static(self.ctx, "/cache/%s.jpg" % md5)
         self.assertEqual(status, 200)
 
+    def test_php_files_are_never_served_as_source(self):
+        # under lighttpd .php was executed; a static route would leak the source (measured on staging)
+        for name in ("health.php", "cache.php"):
+            with open(os.path.join(self.public, name), "w") as handle:
+                handle.write("<?php echo 'secret'; ?>")
+            self.assertEqual(panoviewer.resolve_static(self.ctx, "/" + name), (None, 404), name)
+
     def test_javascript_gets_a_javascript_content_type(self):
         self.assertEqual(panoviewer.content_type("x.js"), "text/javascript; charset=utf-8")
 
@@ -433,6 +440,12 @@ class Wsgi(Fixture):
         self.assertEqual(status, "200 OK")
         self.assertEqual(headers["Content-Type"], "text/html; charset=utf-8")
         self.assertIn(b"viewer", body)
+
+    def test_the_config_route_is_not_a_static_file(self):
+        # /config.php is answered by the handler, so blocking .php statically must not shadow it
+        status, _headers, body = self.call("/config.php", "f=x.jpg")
+        self.assertEqual(status, "200 OK")
+        self.assertIn(b"error", body)
 
     def test_post_is_method_not_allowed(self):
         captured = {}

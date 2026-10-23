@@ -40,6 +40,10 @@ This repository is **not** the whole deployment. Read this before "restoring" an
 | why | hugin-tools is absent from Ubuntu 22.04 (jammy) — see the comment in `Aptfile`; a custom binary was used instead |
 | consumed by | `public_html/multires.sh`: `./generate.py --nona="$TOOL_DATA_DIR"/bin/nona …` |
 
+**`nona` also needs 13 jammy libraries** that the stock `python3.11` job image does not have (it is Debian
+12). They are bundled at `lib/nona-jammy/` — 57 files, 15 MB, extracted from `archive.ubuntu.com` with
+`dpkg-deb -x`. `www/python/src/tile.py` puts that directory on `LD_LIBRARY_PATH` for `generate.py` only.
+
 **A clone of this repository cannot tile.** Consequences:
 
 - The binary is **deliberately not published here**: it is GPL-2.0 software from Hugin, and redistributing a
@@ -48,6 +52,12 @@ This repository is **not** the whole deployment. Read this before "restoring" an
 - The right long-term fix is not to carry a stray binary: the tiler needs only python3, PIL/numpy and
   *some* `nona`. A `python3.11` job image that installs hugin properly (or a rebuilt buildpack image)
   removes this artifact entirely.
+
+## Pruning the cache
+
+`www/python/src/prune_cache.py` (dry run by default) removes the tiler's `<md5>.full.jpg` temporaries and
+tile directories without a `config.json`. Measured on this tool, 2026-10-23: **7,916 temporaries = 206 GB**
+plus 891 abandoned directories = 913 MB — two thirds of a 303 GB cache, leaked by the old shell wrapper.
 
 ## `public_html/cache/` is data, not code
 

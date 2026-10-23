@@ -34,8 +34,9 @@ kubectl exec <pod> -- sh -c 'cd $HOME/www/python && python3 -V && python3 -m uni
 
 | route | what it does |
 |---|---|
-| `GET /config.php?f=<name>` | the viewer's data endpoint; same JSON contract as the PHP |
-| `GET /config.php?f=<name>&p=1` | polling: never fetches, tiles or refreshes |
+| `GET /config?f=<name>` | **canonical**: the viewer's data endpoint; same JSON contract as the PHP |
+| `GET /config?f=<name>&p=1` | polling: never fetches, tiles or refreshes |
+| `GET /config.php?f=<name>` | **legacy alias** for `/config` — no PHP executes on either |
 | `GET /healthz[?db=1]` | diagnostics; cheap by default, `?db=1` also queries the replica |
 | `GET /`, `/src/**`, `/examples/**`, `/cache/**` | static files from `public_html` |
 

@@ -73,6 +73,26 @@ refused by the `registry-admission.tools.wmcloud.org` webhook, and `toolforge we
 lists `php7.4` among its types. See `php-probe/CASE-panoviewer-2026-10.md` and
 `php-probe/PORT-panoviewer-off-php.md` for the two live options (a sanctioned PHP type, or the port).
 
+## Cut over (2026-10-23)
+
+The tool was moved from the blocked PHP 7.4 image to `python3.11` on 2026-10-23. Recorded here because
+these are the steps that are not in the repository:
+
+1. `lib/nona-jammy/` copied in (the tiler's jammy libraries, see above).
+2. `archive/panoviewer-deployed-2026-10-23.tar.gz` taken first — code, `bin/nona`, `.git`, the PHP
+   files, and **not** the 95 GB cache or the credential files (`.toolskube/`, `.kube/`, `.ssh/`,
+   `replica.my.cnf`); verified clean afterwards.
+3. Pre-change cluster state saved to `archive/pre-cutover-2026-10-23/` (deployment yaml, ReplicaSet list,
+   service yaml, manifest) before `toolforge webservice stop`, because `stop` deletes all of them.
+4. `git checkout port/python` (origin stays on gitlab; the fork is a second remote, `fork`).
+5. venv built by a **job** on the `python3.11` image — the interpreter must match the service's.
+6. `toolforge webservice python3.11 start`. Note `start` refuses while an old Deployment object exists
+   ("Your job is already running"), hence the `stop` above.
+
+Verified live: pod `1/1` in ~3 s, `/healthz`, `/` (the new page asking for `/config`), `/config` returning
+`multires` for an existing cached panorama, tiles `200 image/jpeg`, a fresh tiling job succeeding in ~8 s,
+and zero `.full.jpg` afterwards.
+
 ## Rolling back
 
 There is no service to roll back to — only code. `deployed-2026-10-23` is the baseline to diff against, and

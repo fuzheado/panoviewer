@@ -83,7 +83,7 @@ What it found on the live cache (2026-10-23): 7,916 temporaries = **206 GB**, pl
 directories = 913 MB, out of a 303 GB cache. The shell wrapper had leaked the full-resolution download for
 every tiling run ever made.
 
-## Three deliberate differences from the PHP
+## Four deliberate differences from the PHP
 
 Each has a regression test, because each is a behaviour change rather than a translation.
 
@@ -97,5 +97,11 @@ Each has a regression test, because each is a behaviour change rather than a tra
    where `mysqli` gave a string; undecoded it is a `TypeError` inside `json.dumps`, i.e. a 500 on every
    request (found on the first staging pod).
 
-``public_html/multires.php` is not ported: `index.html` never called it, and it had an undefined-variable
+`4. **A panorama that never got tiled is retried.** If a preview is cached but the tiles are missing, the
+   PHP did nothing further: `multires_pending` was computed from the width alone, the cache was fresh, so
+   no job was ever submitted again and the viewer polled "a better version is being prepared" for ever.
+   Now a request queues a job if there is no attempt marker (`cache/<md5>.tiling`) or the last one is
+   older than 15 minutes, so a page load cannot flood the queue.
+
+`public_html/multires.php` is not ported: `index.html` never called it, and it had an undefined-variable
 bug plus an in-request tiler run.

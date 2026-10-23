@@ -57,12 +57,42 @@ def download(url, destination, log=print):
     return size
 
 
+def library_env(home, base=None):
+    """LD_LIBRARY_PATH for nona.
+
+    `bin/nona` is an Ubuntu 22.04 (jammy) binary; the python3.11 job image is Debian 12 (bookworm), so its
+    13 sonames do not exist there: libIlmImf-2_5, libHalf-2_5, libjpeg.so.8, libtiff.so.5, libpng16.so.16,
+    libexiv2.so.27, libOpenGL/libGLX/libGLU/libGLEW, libboost_filesystem 1.74, libpano13, and libtiff's
+    libwebp/libjbig/libdeflate. They are bundled at <home>/lib/nona-jammy (57 files, 15 MB) and measured
+    working inside the pod on 2026-10-23. Without this, nona dies with a dynamic-linker error that the
+    tiler cannot otherwise explain.
+    """
+    env = dict(os.environ if base is None else base)
+    library_dir = os.path.join(home, "lib", "nona-jammy")
+    if os.path.isdir(library_dir):
+        existing = env.get("LD_LIBRARY_PATH")
+        env["LD_LIBRARY_PATH"] = library_dir + (":" + existing if existing else "")
+    return env
+
+
+def default_execute(argv, env=None):
+    """Run generate.py, and keep its output: the job's own logs are not retrievable."""
+    done = subprocess.run(argv, capture_output=True, env=env, timeout=3600)
+    if done.returncode != 0:
+        raise RuntimeError("generate.py failed (rc=%d)\n--- stdout ---\n%s\n--- stderr ---\n%s" % (
+            done.returncode,
+            done.stdout.decode("utf-8", "replace")[-2000:],
+            done.stderr.decode("utf-8", "replace")[-2000:]))
+    return done
+
+
 def run(cache_dir, md5, name, home=None, fetch=download, execute=None, log=print):
     """Generate tiles. Returns the tile directory. Raises on failure (after cleaning up)."""
     home = home or os.environ.get("TOOL_DATA_DIR") or os.environ.get("HOME") or os.getcwd()
     nona = os.path.join(home, "bin", "nona")
     generate = os.path.join(home, "public_html", "generate.py")
-    execute = execute or (lambda argv: subprocess.run(argv, check=True))
+    env = library_env(home)
+    execute = execute or (lambda argv: default_execute(argv, env))
 
     full = os.path.join(cache_dir, md5 + ".full.jpg")
     multi = os.path.join(cache_dir, md5)

@@ -121,6 +121,28 @@ class Cleanup(TilerFixture):
         self.assertTrue(os.path.isfile(os.path.join(self.cache, MD5, "config.json")))
 
 
+class LibraryPath(TilerFixture):
+    def test_the_bundled_jammy_libraries_are_put_on_the_path(self):
+        os.makedirs(os.path.join(self.home, "lib", "nona-jammy"))
+        env = tile.library_env(self.home, base={"PATH": "/bin"})
+        self.assertEqual(env["LD_LIBRARY_PATH"], os.path.join(self.home, "lib", "nona-jammy"))
+
+    def test_an_existing_path_is_kept_after_the_bundle(self):
+        os.makedirs(os.path.join(self.home, "lib", "nona-jammy"))
+        env = tile.library_env(self.home, base={"LD_LIBRARY_PATH": "/usr/lib"})
+        self.assertTrue(env["LD_LIBRARY_PATH"].endswith(":/usr/lib"))
+
+    def test_no_bundle_means_no_override(self):
+        env = tile.library_env(self.home, base={"PATH": "/bin"})
+        self.assertNotIn("LD_LIBRARY_PATH", env)
+
+    def test_generate_failure_output_is_captured(self):
+        with self.assertRaises(RuntimeError) as caught:
+            tile.default_execute([sys.executable, "-c", "import sys; sys.stderr.write('nona said no'); sys.exit(3)"])
+        self.assertIn("rc=3", str(caught.exception))
+        self.assertIn("nona said no", str(caught.exception))
+
+
 class Validation(TilerFixture):
     def test_missing_nona_is_an_error(self):
         os.remove(os.path.join(self.home, "bin", "nona"))

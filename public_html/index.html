@@ -98,6 +98,12 @@ function configLoaded(data)
     noty({ text: "No pannellum config returned" });
   }
 
+  // say so plainly when no high resolution version can be produced
+  if ('tiling_failed' in data && data.tiling_failed) {
+    noty({ text: "No high-resolution version is available for this image - showing it at full width.",
+           type: 'warning' });
+  }
+
   // display a message if a multiresolution build is pending
   if ('multires_pending' in data && data.multires_pending) {
     noty({ text: "A better version is being prepared - I'll let you know when it is done", type: 'information' });

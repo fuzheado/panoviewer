@@ -469,7 +469,10 @@ class RetryCap(Fixture):
         self.marker(md5, value=panoviewer.TILING_MAX_ATTEMPTS, age=time.time() - 86400)
         payload, status = panoviewer.build_config(self.ctx, LARGE_NAME)
         self.assertEqual(status, 200)
-        self.assertTrue(payload["multires_pending"])
+        # it used to say "pending" here, which promised work nothing was going to do
+        self.assertFalse(payload["multires_pending"])
+        self.assertTrue(payload["tiling_failed"])
+        self.assertIn("panorama", payload["pannellum"])
         self.assertEqual(self.jobs, [])
 
     def test_giving_up_is_logged_once_at_the_last_attempt(self):
@@ -524,6 +527,32 @@ class PartialPanorama(Fixture):
         self.assertFalse(panoviewer.is_full_equirectangular(14740, 1825))
         self.assertFalse(panoviewer.is_full_equirectangular(6000, 4000))
         self.assertFalse(panoviewer.is_full_equirectangular(8000, 0))
+
+
+class GivingUp(Fixture):
+    """After the attempt cap the response must stop saying work is in progress."""
+
+    def test_a_capped_entry_reports_failure_not_pending(self):
+        self.rows[LARGE_NAME] = {"width": 8000, "height": 4000, "timestamp": stamp(-60)}
+        _jpg, md5 = self.cache_jpg(LARGE_NAME)
+        with open(_jpg, "wb") as handle:
+            handle.write(self.fetch_body)
+        now = time.time()
+        os.utime(_jpg, (now, now))
+        with open(os.path.join(self.cache, md5 + ".tiling"), "w") as handle:
+            handle.write(str(panoviewer.TILING_MAX_ATTEMPTS))
+        payload, status = panoviewer.build_config(self.ctx, LARGE_NAME)
+        self.assertEqual(status, 200)
+        self.assertFalse(payload["multires_pending"], "nothing is pending; we gave up")
+        self.assertTrue(payload["tiling_failed"])
+        self.assertIn("panorama", payload["pannellum"], "the image is still served")
+        self.assertEqual(self.jobs, [])
+
+    def test_a_normal_pending_entry_is_not_marked_failed(self):
+        self.rows[LARGE_NAME] = {"width": 8000, "height": 4000, "timestamp": stamp(-60)}
+        payload, _ = panoviewer.build_config(self.ctx, LARGE_NAME)
+        self.assertTrue(payload["multires_pending"])
+        self.assertNotIn("tiling_failed", payload)
 
 
 class Errors(Fixture):

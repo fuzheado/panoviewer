@@ -342,6 +342,11 @@ def build_config(ctx, raw_name, polling=False):
     if not equirect:
         # only present when it applies, so the ordinary response keeps the exact shape of the PHP's
         payload["partial_panorama"] = True
+    elif payload["multires_pending"] and _attempt_count(ctx, md5) >= TILING_MAX_ATTEMPTS:
+        # We have given up. Saying "pending" here is a promise nothing will keep: the viewer would poll
+        # for ever. Stop claiming work is in progress, and let the client say so.
+        payload["multires_pending"] = False
+        payload["tiling_failed"] = True
     return payload, 200
 
 

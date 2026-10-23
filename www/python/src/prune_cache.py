@@ -65,6 +65,8 @@ def scan(cache_dir, min_age=3600, now=None, max_bytes=None):
         "abandoned_tiles": [],    # (path, bytes)
         "lru": [],                # (path, bytes) — only with max_bytes
         "kept": {"flat_jpg": 0, "complete_tiles": 0, "too_recent": 0},
+        "total_bytes": 0,          # only measured when a budget is given (measuring means walking)
+        "max_bytes": max_bytes,
     }
     try:
         entries = sorted(os.listdir(cache_dir))
@@ -118,6 +120,7 @@ def scan(cache_dir, min_age=3600, now=None, max_bytes=None):
             + sum(size for _p, size in report["abandoned_tiles"]) \
             + sum(size for _p, size, _m in reclaimable["flat"]) \
             + sum(size for _p, size, _m in reclaimable["tiles"])
+        report["total_bytes"] = total
         if total > max_bytes:
             candidates = sorted(reclaimable["flat"] + reclaimable["tiles"], key=lambda item: item[2])
             excess = total - max_bytes
@@ -207,6 +210,8 @@ def main(argv=None):
             "candidates": count,
             "bytes": freed,
             "kept": report["kept"],
+            "total_bytes": report["total_bytes"],
+            "max_bytes": args.max_bytes,
         }
         if args.apply:
             removed, freed_actual = apply(report, log=lambda m: None)
@@ -228,6 +233,10 @@ def main(argv=None):
             len(report["lru"]), _human(sum(s for _p, s in report["lru"]))))
     print("  kept: %(flat_jpg)d previews, %(complete_tiles)d finished tile sets, "
           "%(too_recent)d too recent" % report["kept"])
+    if args.max_bytes:
+        print("  cache size   : %s of a %s budget (%.0f%%)" % (
+            _human(report["total_bytes"]), _human(args.max_bytes),
+            100.0 * report["total_bytes"] / args.max_bytes if args.max_bytes else 0))
     print("  TOTAL: %d candidates, %s" % (count, _human(freed)))
 
     if not args.apply:

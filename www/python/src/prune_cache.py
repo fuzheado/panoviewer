@@ -93,7 +93,12 @@ def scan(cache_dir, min_age=3600, now=None, max_bytes=None):
             if finished:
                 report["kept"]["complete_tiles"] += 1
                 if max_bytes:
-                    reclaimable["tiles"].append((path, _tree_bytes(path), _mtime(path)))
+                    size = _tree_bytes(path)
+                    try:
+                        size += os.path.getsize(path + ".jpg")
+                    except OSError:
+                        pass
+                    reclaimable["tiles"].append((path, size, _mtime(path)))
             elif age >= min_age:
                 report["abandoned_tiles"].append((path, _tree_bytes(path)))
             else:
@@ -103,7 +108,10 @@ def scan(cache_dir, min_age=3600, now=None, max_bytes=None):
         if name.endswith(".jpg"):
             report["kept"]["flat_jpg"] += 1
             if max_bytes:
-                reclaimable["flat"].append((path, os.path.getsize(path), _mtime(path)))
+                # a preview that belongs to a tile directory is already counted with it; listing it
+                # again would double-count the bytes and let the budget be satisfied on paper only
+                if not os.path.isdir(path[:-len(".jpg")]):
+                    reclaimable["flat"].append((path, os.path.getsize(path), _mtime(path)))
 
     if max_bytes:
         total = sum(size for _p, size in report["temporaries"]) \
@@ -127,17 +135,39 @@ def _total(report):
     return len(everything), sum(size for _p, size in everything)
 
 
+def _evict(path, size, log):
+    """Remove one cache *entry*.
+
+    Evicting a finished tile directory also drops its sibling preview (`<md5>.jpg`) and attempt marker.
+    Leaving the preview behind would turn the entry into "preview only", which is exactly what the sweep
+    treats as a panorama that needs re-tiling -- so a size-driven eviction would quietly cause a tiling
+    job, and then the tiles would come back and push the cache over budget again. Evicting the whole
+    entry makes it a plain cache miss, which a later visit re-creates at whatever size it needs.
+    """
+    removed, freed = 0, 0
+    if os.path.isdir(path):
+        shutil.rmtree(path)
+        removed, freed = 1, size
+        for sibling in (path + ".jpg", path + ".tiling"):
+            try:
+                freed += os.path.getsize(sibling)
+                os.remove(sibling)
+            except OSError:
+                pass
+    else:
+        os.remove(path)
+        removed, freed = 1, size
+    return removed, freed
+
+
 def apply(report, log=print):
     removed, freed = 0, 0
     for path, size in (report["temporaries"] + report["stale_markers"]
                        + report["abandoned_tiles"] + report["lru"]):
         try:
-            if os.path.isdir(path):
-                shutil.rmtree(path)
-            else:
-                os.remove(path)
-            removed += 1
-            freed += size
+            count, bytes_freed = _evict(path, size, log)
+            removed += count
+            freed += bytes_freed
         except FileNotFoundError:
             pass
         except OSError as exc:

@@ -128,6 +128,35 @@ class Previews(PruneFixture):
         self.assertNotIn(newer, [path for path, _s in report["lru"]])
 
 
+class Eviction(PruneFixture):
+    def test_evicting_tiles_also_removes_the_preview_and_marker(self):
+        # otherwise the entry becomes "preview only", which the sweep treats as a repair candidate:
+        # a size-driven eviction would queue a tiling job and refill the cache
+        directory = self.make_tiles("done", finished=True, age=OLD)
+        preview = self.make_file("done.jpg", size=500, age=OLD)
+        marker = self.make_file("done.tiling", size=0, age=OLD)
+        report = prune_cache.scan(self.cache, max_bytes=1)
+        self.assertEqual([path for path, _s in report["lru"]], [directory])
+        prune_cache.apply(report, log=lambda _m: None)
+        self.assertFalse(os.path.exists(directory))
+        self.assertFalse(os.path.exists(preview), "the preview must go with the tiles")
+        self.assertFalse(os.path.exists(marker), "and so must the attempt marker")
+
+    def test_evicting_a_preview_leaves_other_entries_alone(self):
+        keep = self.make_tiles("keep", finished=True, age=NEW)
+        old_preview = self.make_file("old.jpg", size=1_000_000, age=OLD)
+        # budget below the total, but satisfied by dropping just the old 1 MB preview
+        report = prune_cache.scan(self.cache, max_bytes=1_000_000)
+        prune_cache.apply(report, log=lambda _m: None)
+        self.assertFalse(os.path.exists(old_preview))
+        self.assertTrue(os.path.exists(keep), "a newer entry is not evicted")
+
+    def test_no_eviction_when_under_budget(self):
+        self.make_tiles("done", finished=True)
+        report = prune_cache.scan(self.cache, max_bytes=10_000_000)
+        self.assertEqual(report["lru"], [])
+
+
 class Modes(PruneFixture):
     def test_dry_run_deletes_nothing(self):
         path = self.make_file("abc.full.jpg")

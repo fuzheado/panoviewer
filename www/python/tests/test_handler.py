@@ -406,6 +406,76 @@ class StuckPending(Fixture):
         self.assertEqual(len(self.jobs), 1, "exactly one submission, not two")
 
 
+class RetryCap(Fixture):
+    """A file that can never tile must stop being retried."""
+
+    def fresh_preview(self, name):
+        jpg, md5 = self.cache_jpg(name)
+        with open(jpg, "wb") as handle:
+            handle.write(self.fetch_body)
+        now = time.time()
+        os.utime(jpg, (now, now))
+        return jpg, md5
+
+    def marker(self, md5, value=None, age=None):
+        path = os.path.join(self.cache, md5 + ".tiling")
+        if value is not None:
+            with open(path, "w") as handle:
+                handle.write(str(value))
+        if age is not None:
+            os.utime(path, (age, age))
+        return path
+
+    def test_attempts_are_counted_in_the_marker(self):
+        self.add_row(LARGE_NAME, width=8000)
+        _jpg, md5 = self.fresh_preview(LARGE_NAME)
+        panoviewer.build_config(self.ctx, LARGE_NAME)
+        with open(os.path.join(self.cache, md5 + ".tiling")) as handle:
+            self.assertEqual(handle.read().strip(), "1")
+
+    def test_it_retries_up_to_the_limit_then_stops(self):
+        self.add_row(LARGE_NAME, width=8000)
+        _jpg, md5 = self.fresh_preview(LARGE_NAME)
+        stale = time.time() - panoviewer.TILING_RETRY_SECONDS - 60
+        for attempt in range(1, panoviewer.TILING_MAX_ATTEMPTS + 1):
+            self.marker(md5, value=attempt - 1, age=stale)
+            panoviewer.build_config(self.ctx, LARGE_NAME)
+        self.assertEqual(len(self.jobs), panoviewer.TILING_MAX_ATTEMPTS)
+        # one more window later: no further submission
+        self.marker(md5, age=stale)
+        panoviewer.build_config(self.ctx, LARGE_NAME)
+        self.assertEqual(len(self.jobs), panoviewer.TILING_MAX_ATTEMPTS, "must give up after the cap")
+
+    def test_a_capped_entry_still_serves_the_preview(self):
+        self.add_row(LARGE_NAME, width=8000)
+        _jpg, md5 = self.fresh_preview(LARGE_NAME)
+        self.marker(md5, value=panoviewer.TILING_MAX_ATTEMPTS, age=time.time() - 86400)
+        payload, status = panoviewer.build_config(self.ctx, LARGE_NAME)
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["multires_pending"])
+        self.assertEqual(self.jobs, [])
+
+    def test_giving_up_is_logged_once_at_the_last_attempt(self):
+        self.add_row(LARGE_NAME, width=8000)
+        _jpg, md5 = self.fresh_preview(LARGE_NAME)
+        self.job_result = (False, "rc=1 nona crashed")
+        stale = time.time() - panoviewer.TILING_RETRY_SECONDS - 60
+        self.marker(md5, value=panoviewer.TILING_MAX_ATTEMPTS - 1, age=stale)
+        panoviewer.build_config(self.ctx, LARGE_NAME)
+        self.assertTrue(any("giving up" in line for line in self.logs), self.logs)
+
+    def test_a_reupload_resets_the_budget(self):
+        self.add_row(LARGE_NAME, width=8000, offset=0)      # newer than the cached preview
+        _jpg, md5 = self.fresh_preview(LARGE_NAME)
+        old = time.time() - 7200
+        os.utime(os.path.join(self.cache, md5 + ".jpg"), (old, old))   # cache now stale
+        self.marker(md5, value=panoviewer.TILING_MAX_ATTEMPTS, age=old)
+        panoviewer.build_config(self.ctx, LARGE_NAME)
+        self.assertEqual(len(self.jobs), 1, "new content deserves a fresh attempt budget")
+        with open(os.path.join(self.cache, md5 + ".tiling")) as handle:
+            self.assertEqual(handle.read().strip(), "1")
+
+
 class Errors(Fixture):
     def test_missing_filename(self):
         payload, status = panoviewer.build_config(self.ctx, "")

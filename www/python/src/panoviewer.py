@@ -43,6 +43,9 @@ MAX_WIDTH = 4000
 # If a panorama is still untitled after an attempt, try again -- but not on every request. The marker
 # file lives beside the cache entry; see _attempt_due().
 TILING_RETRY_SECONDS = 900
+# ...and stop after this many attempts, or a file that can never tile (a non-2:1 image, say) would
+# re-queue a job every window for ever, downloading tens of MB each time.
+TILING_MAX_ATTEMPTS = 5
 UPLOAD_BASE = "https://upload.wikimedia.org/wikipedia/commons"
 THUMB_BASE = "https://commons.wikimedia.org/w/thumb.php"
 # The jobs CLI resolves a type name ("python3.11") to an image reference; the shim below talks to
@@ -195,8 +198,19 @@ def _marker_path(ctx, md5):
     return os.path.join(ctx.cache_dir, md5 + ".tiling")
 
 
+def _attempt_count(ctx, md5):
+    """How many tiling attempts have been made for this entry (0 when unknown)."""
+    try:
+        with open(_marker_path(ctx, md5)) as handle:
+            return int(handle.read().strip() or 0)
+    except (OSError, ValueError):
+        return 0
+
+
 def _attempt_due(ctx, md5):
-    """True when a tiling attempt is due: never tried, or the last one is older than the window."""
+    """True when a tiling attempt is due: never tried, window elapsed, and not given up on."""
+    if _attempt_count(ctx, md5) >= TILING_MAX_ATTEMPTS:
+        return False
     try:
         age = time.time() - os.path.getmtime(_marker_path(ctx, md5))
     except OSError:
@@ -204,18 +218,26 @@ def _attempt_due(ctx, md5):
     return age >= TILING_RETRY_SECONDS
 
 
-def _submit_tiler(ctx, md5, name, width=None, height=None):
-    """Submit the tiling job and record the attempt. Returns (ok, detail)."""
+def _submit_tiler(ctx, md5, name, width=None, height=None, fresh=False):
+    """Submit the tiling job and record the attempt. Returns (ok, detail).
+
+    `fresh=True` resets the attempt counter: the image itself changed, so it deserves a new budget.
+    """
+    attempts = 1 if fresh else _attempt_count(ctx, md5) + 1
     argv = job_argv(ctx, md5, name, width, height)
     try:
         ok, detail = ctx.submit_job(md5, argv)
     except Exception as exc:                      # noqa: BLE001
         ok, detail = False, "%s: %s" % (type(exc).__name__, exc)
     try:
-        with open(_marker_path(ctx, md5), "w"):
-            pass
+        with open(_marker_path(ctx, md5), "w") as handle:
+            handle.write(str(attempts))
     except OSError:
         pass
+    if attempts >= TILING_MAX_ATTEMPTS and not ok:
+        ctx.log("giving up on %r (md5 %s) after %d attempts: %s" % (name, md5, attempts, detail))
+    elif attempts > 1:
+        ctx.log("tiling attempt %d/%d for %r (md5 %s)" % (attempts, TILING_MAX_ATTEMPTS, name, md5))
     if not ok:
         # Loud on purpose: the old code discarded this and the viewer promised "preparing" forever.
         ctx.log("TILER NOT STARTED for %r (md5 %s): %s" % (name, md5, detail))
@@ -299,7 +321,8 @@ def _refresh(ctx, name, md5, width, jpg_abs, tile_abs, db_timestamp, height=None
 
     if width > ctx.max_width:
         preview = thumb_url(name, ctx.max_width)
-        _submit_tiler(ctx, md5, name, width, height)
+        # fresh content: this is not a retry, so the attempt budget starts again
+        _submit_tiler(ctx, md5, name, width, height, fresh=True)
     else:
         preview = source
 

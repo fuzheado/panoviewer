@@ -93,6 +93,23 @@ respects the retry cap; paces API requests at 1/second; `--max-jobs 3` because t
 
 First run over 500 files: 218 already tiled, 22 too small, 142 never viewed, **117 not 2:1**, 1 repaired.
 
+## Scheduled jobs (the operational half, not in git)
+
+| job | schedule | what it does |
+|---|---|---|
+| `uptime-check` | `17 * * * *` | `src/check_uptime.py` — health + database + one real tile; **`--emails onfailure`** is the only alerting this tool has. Also appends to `logs/uptime.log`. |
+| `sweep-tiles` | `30 3 * * *` | repairs panoramas that were served but never tiled, 2 000 files a night, resumable cursor |
+| `prune-cache` | `45 4 * * 0` | removes tiler temporaries and abandoned tile dirs older than a day |
+
+```bash
+toolforge jobs run uptime-check --schedule "17 * * * *" --image python3.11 --mount=all \
+  --emails onfailure --command 'python3 $HOME/www/python/src/check_uptime.py'
+```
+
+`--emails onfailure` mails the tool's registered contact — **confirm that address in toolsadmin**, it
+was not verified from inside the tool. That is why every check also writes `logs/uptime.log`: a
+failure must leave a trace whether or not the mail arrives.
+
 ## Pruning (`src/prune_cache.py`)
 
 ```

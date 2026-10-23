@@ -93,6 +93,16 @@ Verified live: pod `1/1` in ~3 s, `/healthz`, `/` (the new page asking for `/con
 `multires` for an existing cached panorama, tiles `200 image/jpeg`, a fresh tiling job succeeding in ~8 s,
 and zero `.full.jpg` afterwards.
 
+## Scheduled jobs
+
+Three cron jobs live in the tool account (not in git — `toolforge jobs list` is the source of truth):
+
+* `uptime-check` hourly — health, database, one real tile; `--emails onfailure`
+* `sweep-tiles` nightly — repairs served-but-untiled panoramas (cursor in `logs/sweep-cursor.json`)
+* `prune-cache` weekly — drops tiler temporaries and abandoned tile directories older than a day
+
+They run `src/*.py` from this checkout, so a `git pull` changes them without touching the schedules.
+
 ## Rolling back
 
 There is no service to roll back to — only code. `deployed-2026-10-23` is the baseline to diff against, and

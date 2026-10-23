@@ -127,14 +127,18 @@ class Context(object):
         self.public_dir = public_dir or os.path.join(home, "public_html")
         self.max_width = max_width
         self.cache_dir = os.path.join(self.public_dir, "cache")
-        self.metadata = metadata or (lambda name: None)
-        self.fetch = fetch or (lambda url, limit=None: b"")
-        self.submit_job = submit_job or (lambda md5, argv: (True, "not submitted (stub)"))
-        self.log = log or (lambda message: None)
-        self.job_image = job_image or DEFAULT_JOB_IMAGE
+        # `is not None`, not `or`: a callable whose __len__ is 0 (MetadataCache) is falsy, so `or`
+        # would silently substitute the stub. That is exactly what happened, and the hourly health
+        # check reported "database probe failed: no detail" within minutes of the deploy.
+        self.metadata = metadata if metadata is not None else (lambda name: None)
+        self.fetch = fetch if fetch is not None else (lambda url, limit=None: b"")
+        self.submit_job = submit_job if submit_job is not None else (
+            lambda md5, argv: (True, "not submitted (stub)"))
+        self.log = log if log is not None else (lambda message: None)
+        self.job_image = job_image if job_image is not None else DEFAULT_JOB_IMAGE
         self.tool_name = tool_name or os.path.basename(home.rstrip("/")) or "panoviewer"
-        self.clock = clock or (lambda: time.time())
-        self.preview_width = preview_width or PREVIEW_WIDTH
+        self.clock = clock if clock is not None else (lambda: time.time())
+        self.preview_width = preview_width if preview_width is not None else PREVIEW_WIDTH
 
     # paths, all relative to the docroot because the browser resolves them against the page
     def jpg_rel(self, md5):
@@ -185,7 +189,9 @@ class MetadataCache(object):
             self._entries[name] = (now + self._ttl, value)
         return value
 
-    def __len__(self):
+    def size(self):
+        """Deliberately NOT `__len__`: an empty cache would then be falsy, and a truthiness test
+        anywhere (we had one) would silently drop it."""
         return len(self._entries)
 
 

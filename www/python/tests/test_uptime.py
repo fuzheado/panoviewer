@@ -110,6 +110,24 @@ class Failures(unittest.TestCase):
             check_uptime.run = original
 
 
+class ContextWiring(unittest.TestCase):
+    """A regression test for the bug the hourly check caught on its first run."""
+
+    def test_an_empty_cache_is_still_used(self):
+        # MetadataCache used to define __len__, so an empty one was FALSY and `metadata or stub`
+        # replaced it with "always None" -- every /config then reported a database error.
+        cache = panoviewer.MetadataCache(lambda n: {"width": 8000, "height": 4000, "timestamp": "x"})
+        self.assertEqual(cache.size(), 0)
+        ctx = panoviewer.Context(home="/tmp", metadata=cache)
+        self.assertIs(ctx.metadata, cache)
+        self.assertEqual(ctx.metadata("anything")["width"], 8000)
+
+    def test_the_other_injected_callables_survive_too(self):
+        fetch = lambda url, limit=None: b""            # noqa: E731
+        ctx = panoviewer.Context(home="/tmp", fetch=fetch)
+        self.assertIs(ctx.fetch, fetch)
+
+
 class MetadataCacheTests(unittest.TestCase):
     def test_a_lookup_is_reused_within_the_window(self):
         calls = []
@@ -117,7 +135,7 @@ class MetadataCacheTests(unittest.TestCase):
         cache = panoviewer.MetadataCache(lambda n: calls.append(n) or {"width": 1},
                                          ttl=30, clock=lambda: now[0])
         cache("x"), cache("x"), cache("x")
-        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls, ["x"])
 
     def test_it_refreshes_after_the_window(self):
         calls = []

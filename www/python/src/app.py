@@ -14,6 +14,13 @@ loudly (see DEPLOYED-STATE.md and PORT-panoviewer-off-php.md).
 
 Everything here is standard library only, on purpose: if a dependency is
 missing, we want `/healthz` to tell us, not to crash the import.
+
+FOUND BY RUNNING IT (2026-10-23, first staging pod): `image.img_timestamp` is a
+`varbinary(14)` column, so a Python driver hands it back as **bytes**
+(b"20260813110841"), where PHP's mysqli gave a string. Unhandled, that is a
+`TypeError: Object of type bytes is not JSON serializable` inside the response
+and a 500 for every request -- i.e. the port would "work" in review and fail on
+the first real call. Decode every value that crosses into JSON.
 """
 import json
 import os
@@ -26,6 +33,13 @@ DB_NAME = "commonswiki_p"
 # A real panorama that exists (>4000 px, so it takes the tiling path), used only
 # to prove the query works end-to-end.
 PROBE_FILE = "Athens-acropolis-propylaia-2023-05-panorama-2x.jpg"
+
+
+def _text_value(value):
+    """Rows from the wiki replicas carry varbinary columns; keep JSON happy."""
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value).decode("utf-8", "replace")
+    return value
 
 
 def _probe_drivers():
@@ -72,7 +86,10 @@ def _probe_db():
             "host": host,
             "ms": round((time.time() - started) * 1000),
             "row": None if row is None else {
-                "img_width": row[0], "img_height": row[1], "img_timestamp": row[2],
+                "img_width": _text_value(row[0]),
+                "img_height": _text_value(row[1]),
+                "img_timestamp": _text_value(row[2]),
+                "img_timestamp_type": type(_text_value(row[2])).__name__,
             },
         }
     except Exception as exc:                          # noqa: BLE001

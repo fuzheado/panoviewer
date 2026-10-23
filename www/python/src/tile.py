@@ -121,7 +121,24 @@ def urlencoded_name(name):
 
 
 def log_line(message):
-    print("[tile %s] %s" % (time.strftime("%H:%M:%S"), message), flush=True)
+    """stdout for the job log, plus a file we can read later.
+
+    `toolforge jobs logs` was not available for this tool's jobs (measured 2026-10-23: "Job ... does not
+    have any logs available"), so the tiler keeps its own: <TOOL_DATA_DIR>/logs/tile.log. A tiling failure
+    that leaves no trace is the same class of bug as the 206 GB of temporaries.
+    """
+    line = "[tile %s] %s" % (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), message)
+    print(line, flush=True)
+    data_dir = os.environ.get("TOOL_DATA_DIR")
+    if not data_dir:
+        return                       # tests and local runs: stdout only
+    try:
+        path = os.path.join(data_dir, "logs", "tile.log")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a") as handle:
+            handle.write(line + "\n")
+    except Exception:                # noqa: BLE001 - logging must never be what fails the job
+        pass
 
 
 if __name__ == "__main__":

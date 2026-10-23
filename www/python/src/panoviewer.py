@@ -41,7 +41,12 @@ import urllib.request
 MAX_WIDTH = 4000
 UPLOAD_BASE = "https://upload.wikimedia.org/wikipedia/commons"
 THUMB_BASE = "https://commons.wikimedia.org/w/thumb.php"
-DEFAULT_JOB_IMAGE = "python3.11"   # stock image: the tool's own image namespace is denylisted
+# The jobs CLI resolves a type name ("python3.11") to an image reference; the shim below talks to
+# the jobs API directly, so it must send the RESOLVED reference. Measured on staging 2026-10-23 with
+# `toolforge jobs run --image python3.11` + `kubectl get job -o jsonpath="...image"`: the CLI sends
+# this exact string. Sending the bare type made the API fall back to the tool's default image, which
+# is the denylisted buildpack one -- i.e. every tiling job failed at admission.
+DEFAULT_JOB_IMAGE = ("docker-registry.tools.wmflabs.org/toolforge-python311-sssd-web:latest")
 USER_AGENT = "panoviewer/2.0 (https://panoviewer.toolforge.org/)"
 
 # config.php sniffs the first 100 bytes at offset 6 for one of these.

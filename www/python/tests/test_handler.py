@@ -191,7 +191,9 @@ class LargeImage(Fixture):
         self.assertEqual(argv[1:3], ["jobs", "run"])
         # the tool's own image namespace is denylisted (Regex ^.*/tool-panoviewer/.*$), so the tiler
         # must run on a stock image; assert we never name the blocked one again
-        self.assertEqual(argv[argv.index("--image") + 1], "python3.11")
+        # the resolved reference, not the type name: the shim bypasses the CLI's name mapping
+        self.assertEqual(argv[argv.index("--image") + 1],
+                         "docker-registry.tools.wmflabs.org/toolforge-python311-sssd-web:latest")
         self.assertNotIn("tool-panoviewer/tool-panoviewer", " ".join(argv))
         self.assertIn("--mount=all", argv)
         self.assertEqual(argv[-1], "pano-" + md5)

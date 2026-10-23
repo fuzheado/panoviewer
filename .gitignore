@@ -3,6 +3,7 @@
 /public_html/cache
 /replica.my.cnf
 /service.log
+/uwsgi.log
 /service.manifest
 
 # ── tool-account secrets and dotfiles ────────────────────────────────────────────────────────────

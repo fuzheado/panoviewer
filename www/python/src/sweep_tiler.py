@@ -59,10 +59,17 @@ def fetch_page(category, continuation=None, limit=50, interval=1.0, opener=None,
     return pages, payload.get("continue")
 
 
-def plan(cache_dir, pages, attempts_max=None):
-    """Decide what to do with each file. Reads the cache, writes nothing."""
+def plan(cache_dir, pages, attempts_max=None, include_unseen=False):
+    """Decide what to do with each file. Reads the cache, writes nothing.
+
+    `include_unseen=False` (the default) restricts the sweep to entries the tool has already served —
+    i.e. it repairs panoramas somebody actually looked at and found hazy. Tiling the whole category
+    instead would pre-generate high-resolution versions for ~1.5M files nobody has opened, which is a
+    cache-growth policy decision (tens of gigabytes) rather than a bug fix.
+    """
     attempts_max = attempts_max or panoviewer.TILING_MAX_ATTEMPTS
-    decisions = {"tiled": 0, "too_small": 0, "capped": 0, "queue": [], "no_info": 0}
+    decisions = {"tiled": 0, "too_small": 0, "capped": 0, "no_info": 0,
+                 "not_cached": 0, "queue": []}
     for page in pages:
         info = (page.get("imageinfo") or [{}])[0]
         title = page.get("title", "")
@@ -80,6 +87,10 @@ def plan(cache_dir, pages, attempts_max=None):
             continue
         if width <= panoviewer.MAX_WIDTH:
             decisions["too_small"] += 1
+            continue
+        if not include_unseen and not os.path.isfile(os.path.join(cache_dir, md5 + ".jpg")):
+            # never viewed: nothing has been served, so nothing can look hazy
+            decisions["not_cached"] += 1
             continue
         if panoviewer._attempt_count(_ContextShim(cache_dir), md5) >= attempts_max:
             decisions["capped"] += 1
@@ -127,6 +138,8 @@ def main(argv=None):
     parser.add_argument("--interval", type=float, default=1.0, help="seconds between API requests")
     parser.add_argument("--cursor", default=None, help="file holding the API continuation token")
     parser.add_argument("--max-jobs", type=int, default=25, help="stop queueing after this many (default 25)")
+    parser.add_argument("--include-unseen", action="store_true",
+                        help="also tile files nobody has opened (pre-generates cache; off by default)")
     parser.add_argument("--apply", action="store_true", help="actually queue jobs (default: report only)")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
@@ -138,14 +151,15 @@ def main(argv=None):
         with open(args.cursor) as handle:
             continuation = json.load(handle)
 
-    totals = {"scanned": 0, "tiled": 0, "too_small": 0, "capped": 0, "no_info": 0, "queued": 0, "failed": 0}
+    totals = {"scanned": 0, "tiled": 0, "too_small": 0, "capped": 0, "no_info": 0,
+              "not_cached": 0, "queued": 0, "failed": 0}
     while totals["scanned"] < args.limit:
         pages, continuation = fetch_page(args.category, continuation, args.page_size, args.interval)
         if not pages:
             break
         totals["scanned"] += len(pages)
-        decisions = plan(cache_dir, pages)
-        for key in ("tiled", "too_small", "capped", "no_info"):
+        decisions = plan(cache_dir, pages, include_unseen=args.include_unseen)
+        for key in ("tiled", "too_small", "capped", "no_info", "not_cached"):
             totals[key] += decisions[key]
         if args.apply and decisions["queue"]:
             room = args.max_jobs - totals["queued"]
@@ -154,9 +168,9 @@ def main(argv=None):
                 totals["queued"] += submitted
                 totals["failed"] += failed
         else:
-            totals["queued"] += 0
             for item in decisions["queue"]:
                 print("  would queue: %s (%dx%d)" % (item["name"], item["width"], item["height"]))
+            totals["queued"] += len(decisions["queue"])
         if not continuation or totals["queued"] >= args.max_jobs:
             break
 
@@ -176,6 +190,7 @@ def main(argv=None):
     print("  gave up earlier: %(capped)d  (reached the %(limit)s-attempt cap)"
           % dict(totals, limit=panoviewer.TILING_MAX_ATTEMPTS))
     print("  no size info  : %(no_info)d" % totals)
+    print("  never viewed  : %(not_cached)d  (skipped: nothing served, nothing to repair)" % totals)
     print("  %(label)s: %(queued)d   failed: %(failed)d"
           % dict(totals, label="queued" if args.apply else "would queue"))
     if continuation:

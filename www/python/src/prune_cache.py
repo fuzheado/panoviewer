@@ -30,6 +30,10 @@ import sys
 import time
 
 TEMP_SUFFIXES = (".full.jpg", ".full.jpg.part")
+# "<md5>.tiling" marks when a tiling attempt was last made (see panoviewer.TILING_RETRY_SECONDS).
+# Harmless, but they are directory entries and this cache has 22k of those already.
+MARKER_SUFFIX = ".tiling"
+MARKER_MAX_AGE = 30 * 86400
 
 
 def _mtime(path):
@@ -57,6 +61,7 @@ def scan(cache_dir, min_age=3600, now=None, max_bytes=None):
         "cache_dir": cache_dir,
         "min_age_seconds": min_age,
         "temporaries": [],        # (path, bytes)
+        "stale_markers": [],      # (path, bytes) — old "<md5>.tiling" attempt markers
         "abandoned_tiles": [],    # (path, bytes)
         "lru": [],                # (path, bytes) — only with max_bytes
         "kept": {"flat_jpg": 0, "complete_tiles": 0, "too_recent": 0},
@@ -70,6 +75,11 @@ def scan(cache_dir, min_age=3600, now=None, max_bytes=None):
     for name in entries:
         path = os.path.join(cache_dir, name)
         age = now - _mtime(path)
+
+        if name.endswith(MARKER_SUFFIX):
+            if age >= MARKER_MAX_AGE:
+                report["stale_markers"].append((path, os.path.getsize(path)))
+            continue
 
         if name.endswith(TEMP_SUFFIXES):
             if age >= min_age:
@@ -112,13 +122,15 @@ def scan(cache_dir, min_age=3600, now=None, max_bytes=None):
 
 
 def _total(report):
-    everything = report["temporaries"] + report["abandoned_tiles"] + report["lru"]
+    everything = (report["temporaries"] + report["stale_markers"]
+                  + report["abandoned_tiles"] + report["lru"])
     return len(everything), sum(size for _p, size in everything)
 
 
 def apply(report, log=print):
     removed, freed = 0, 0
-    for path, size in report["temporaries"] + report["abandoned_tiles"] + report["lru"]:
+    for path, size in (report["temporaries"] + report["stale_markers"]
+                       + report["abandoned_tiles"] + report["lru"]):
         try:
             if os.path.isdir(path):
                 shutil.rmtree(path)
@@ -160,6 +172,7 @@ def main(argv=None):
             "cache_dir": report["cache_dir"],
             "temporaries": len(report["temporaries"]),
             "abandoned_tile_dirs": len(report["abandoned_tiles"]),
+            "stale_markers": len(report["stale_markers"]),
             "lru_evictions": len(report["lru"]),
             "candidates": count,
             "bytes": freed,
@@ -176,6 +189,8 @@ def main(argv=None):
     print("cache: %s   min-age: %ds" % (report["cache_dir"], args.min_age))
     print("  tiler temporaries (*.full.jpg)      : %6d  %10s" % (
         len(report["temporaries"]), _human(sum(s for _p, s in report["temporaries"]))))
+    print("  stale tiling markers (>30 days)      : %6d  %10s" % (
+        len(report["stale_markers"]), _human(sum(s for _p, s in report["stale_markers"]))))
     print("  abandoned tile dirs (no config.json): %6d  %10s" % (
         len(report["abandoned_tiles"]), _human(sum(s for _p, s in report["abandoned_tiles"]))))
     if args.max_bytes:

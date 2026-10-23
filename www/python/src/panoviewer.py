@@ -39,6 +39,9 @@ import urllib.parse
 import urllib.request
 
 MAX_WIDTH = 4000
+# If a panorama is still untitled after an attempt, try again -- but not on every request. The marker
+# file lives beside the cache entry; see _attempt_due().
+TILING_RETRY_SECONDS = 900
 UPLOAD_BASE = "https://upload.wikimedia.org/wikipedia/commons"
 THUMB_BASE = "https://commons.wikimedia.org/w/thumb.php"
 # The jobs CLI resolves a type name ("python3.11") to an image reference; the shim below talks to
@@ -165,6 +168,37 @@ def job_argv(ctx, md5, name):
             "--command", command, "pano-" + md5]
 
 
+def _marker_path(ctx, md5):
+    return os.path.join(ctx.cache_dir, md5 + ".tiling")
+
+
+def _attempt_due(ctx, md5):
+    """True when a tiling attempt is due: never tried, or the last one is older than the window."""
+    try:
+        age = time.time() - os.path.getmtime(_marker_path(ctx, md5))
+    except OSError:
+        return True
+    return age >= TILING_RETRY_SECONDS
+
+
+def _submit_tiler(ctx, md5, name):
+    """Submit the tiling job and record the attempt. Returns (ok, detail)."""
+    argv = job_argv(ctx, md5, name)
+    try:
+        ok, detail = ctx.submit_job(md5, argv)
+    except Exception as exc:                      # noqa: BLE001
+        ok, detail = False, "%s: %s" % (type(exc).__name__, exc)
+    try:
+        with open(_marker_path(ctx, md5), "w"):
+            pass
+    except OSError:
+        pass
+    if not ok:
+        # Loud on purpose: the old code discarded this and the viewer promised "preparing" forever.
+        ctx.log("TILER NOT STARTED for %r (md5 %s): %s" % (name, md5, detail))
+    return ok, detail
+
+
 # ── the handler ──────────────────────────────────────────────────────────────────────────────────
 def build_config(ctx, raw_name, polling=False):
     """Return (payload, http_status). Mirrors config.php, including its error strings."""
@@ -192,6 +226,16 @@ def build_config(ctx, raw_name, polling=False):
             return refreshed, 200
 
     config_path = os.path.join(tile_abs, "config.json")
+
+    # Stuck-pending repair. A tiled panorama whose tiles were never produced -- an interrupted run, a
+    # tiler that was blocked, or a cache directory cleaned up -- has a fresh preview and no config.json,
+    # so no refresh happens and, before this, no job was ever submitted again. The viewer then polls
+    # "a better version is being prepared" for ever. Retry on request, at most once per window.
+    if not polling and width > ctx.max_width and not os.path.isfile(config_path) \
+            and _attempt_due(ctx, md5):
+        ctx.log("RETILING %r (md5 %s): tiles missing and the last attempt is stale" % (name, md5))
+        _submit_tiler(ctx, md5, name)
+
     if os.path.isfile(config_path):
         try:
             with open(config_path, "rb") as handle:
@@ -231,15 +275,7 @@ def _refresh(ctx, name, md5, width, jpg_abs, tile_abs, db_timestamp):
 
     if width > ctx.max_width:
         preview = thumb_url(name, ctx.max_width)
-        argv = job_argv(ctx, md5, name)
-        try:
-            ok, detail = ctx.submit_job(md5, argv)
-        except Exception as exc:                      # noqa: BLE001
-            ok, detail = False, "%s: %s" % (type(exc).__name__, exc)
-        if not ok:
-            # Loud on purpose: the old code discarded this and the viewer promised "preparing"
-            # forever. The preview is still served, so the page keeps working.
-            ctx.log("TILER NOT STARTED for %r (md5 %s): %s" % (name, md5, detail))
+        _submit_tiler(ctx, md5, name)
     else:
         preview = source
 

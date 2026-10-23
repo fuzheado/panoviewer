@@ -309,6 +309,70 @@ class Refresh(Fixture):
         self.assertEqual(self.jobs, [])
 
 
+class StuckPending(Fixture):
+    """A preview that exists with no tiles must not poll for ever without another attempt."""
+
+    def fresh_preview(self, name):
+        jpg, md5 = self.cache_jpg(name)
+        with open(jpg, "wb") as handle:
+            handle.write(self.fetch_body)
+        os.utime(jpg, (time.time(), time.time()))   # fresh, so no refresh will happen
+        return jpg, md5
+
+    def test_it_submits_a_job_when_tiles_are_missing_but_the_preview_is_fresh(self):
+        self.add_row(LARGE_NAME, width=8000)
+        _jpg, md5 = self.fresh_preview(LARGE_NAME)
+        payload, _ = panoviewer.build_config(self.ctx, LARGE_NAME)
+        self.assertTrue(payload["multires_pending"])
+        self.assertEqual(len(self.jobs), 1, "an untitled panorama must get another attempt")
+        self.assertTrue(os.path.exists(os.path.join(self.cache, md5 + ".tiling")))
+        self.assertTrue(any("RETILING" in line for line in self.logs))
+
+    def test_it_does_not_resubmit_within_the_window(self):
+        self.add_row(LARGE_NAME, width=8000)
+        self.fresh_preview(LARGE_NAME)
+        panoviewer.build_config(self.ctx, LARGE_NAME)
+        panoviewer.build_config(self.ctx, LARGE_NAME)
+        panoviewer.build_config(self.ctx, LARGE_NAME)
+        self.assertEqual(len(self.jobs), 1, "every page load must not queue a job")
+
+    def test_it_resubmits_once_the_window_has_passed(self):
+        self.add_row(LARGE_NAME, width=8000)
+        _jpg, md5 = self.fresh_preview(LARGE_NAME)
+        marker = os.path.join(self.cache, md5 + ".tiling")
+        with open(marker, "w"):
+            pass
+        old = time.time() - panoviewer.TILING_RETRY_SECONDS - 60
+        os.utime(marker, (old, old))
+        panoviewer.build_config(self.ctx, LARGE_NAME)
+        self.assertEqual(len(self.jobs), 1)
+
+    def test_no_retry_when_the_tiles_are_there(self):
+        self.add_row(LARGE_NAME, width=8000)
+        self.write_tiled(LARGE_NAME, mtime_offset=0)
+        panoviewer.build_config(self.ctx, LARGE_NAME)
+        self.assertEqual(self.jobs, [])
+
+    def test_no_retry_for_a_small_image(self):
+        self.add_row(SMALL_NAME, width=2000)
+        self.fresh_preview(SMALL_NAME)
+        payload, _ = panoviewer.build_config(self.ctx, SMALL_NAME)
+        self.assertFalse(payload["multires_pending"])
+        self.assertEqual(self.jobs, [])
+
+    def test_polling_never_queues_work(self):
+        self.add_row(LARGE_NAME, width=8000)
+        self.fresh_preview(LARGE_NAME)
+        payload, _ = panoviewer.build_config(self.ctx, LARGE_NAME, polling=True)
+        self.assertTrue(payload["multires_pending"])
+        self.assertEqual(self.jobs, [])
+
+    def test_a_successful_refresh_marks_the_attempt_so_the_retry_does_not_fire(self):
+        self.add_row(LARGE_NAME, width=8000)      # no cached preview: the refresh path runs
+        panoviewer.build_config(self.ctx, LARGE_NAME)
+        self.assertEqual(len(self.jobs), 1, "exactly one submission, not two")
+
+
 class Errors(Fixture):
     def test_missing_filename(self):
         payload, status = panoviewer.build_config(self.ctx, "")

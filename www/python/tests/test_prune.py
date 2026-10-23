@@ -100,6 +100,19 @@ class AbandonedTiles(PruneFixture):
         self.assertTrue(os.path.exists(alive))
 
 
+class Markers(PruneFixture):
+    def test_an_old_tiling_marker_is_collected(self):
+        self.make_file("abc.tiling", size=0, age=time.time() - 40 * 86400)
+        report = prune_cache.scan(self.cache)
+        self.assertEqual(len(report["stale_markers"]), 1)
+
+    def test_a_recent_marker_is_kept(self):
+        # it is what stops a page load from queuing another tiling job
+        self.make_file("abc.tiling", size=0, age=NEW)
+        report = prune_cache.scan(self.cache)
+        self.assertEqual(report["stale_markers"], [])
+
+
 class Previews(PruneFixture):
     def test_flat_previews_survive_by_default(self):
         self.make_file("abc.jpg", size=2_000_000)
